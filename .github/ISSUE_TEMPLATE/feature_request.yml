@@ -1,0 +1,39 @@
+name: Feature request
+description: Propose a scoped improvement to LLMock
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What real user or testing problem does this solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Keep it concrete and scoped.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tradeoffs
+    attributes:
+      label: Tradeoffs
+      description: Maintenance cost, compatibility impact, or scope concerns.
+
+  - type: dropdown
+    id: fit
+    attributes:
+      label: Why it fits LLMock
+      options:
+        - Improves resilience testing
+        - Improves API fidelity
+        - Improves onboarding or adoption
+        - Improves packaging or maintainability
+        - Not sure
+    validations:
+      required: true

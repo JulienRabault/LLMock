@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a runtime, CLI, docs, or provider-shape issue
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is wrong, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - OpenAI-compatible routes
+        - Anthropic routes
+        - Mistral routes
+        - Cohere routes
+        - Gemini routes
+        - Groq routes
+        - Together routes
+        - Perplexity routes
+        - AI21 routes
+        - xAI routes
+        - Batch endpoints
+        - Chaos / config / CLI
+        - Packaging / release / CI
+        - Docs / examples
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction
+      description: Include request payloads, config, and commands when possible.
+      placeholder: |
+        1. Start LLMock with ...
+        2. Send request to ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Python version, install method, OS, and LLMock version if relevant.
