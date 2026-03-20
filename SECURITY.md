@@ -8,7 +8,7 @@ Security fixes are applied to the latest released version.
 
 Please do not open a public issue for a suspected security problem.
 
-Use GitHub private vulnerability reporting for this repository when available. If private reporting is not enabled yet, wait for that channel or contact the maintainer privately before public disclosure.
+Use GitHub private vulnerability reporting for this repository.
 
 ## Scope
 

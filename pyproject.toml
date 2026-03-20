@@ -20,6 +20,12 @@ dependencies = [
 [project.scripts]
 llmock = "llmock.cli:app"
 
+[project.urls]
+Homepage = "https://github.com/JulienRabault/LLMock"
+Repository = "https://github.com/JulienRabault/LLMock"
+Issues = "https://github.com/JulienRabault/LLMock/issues"
+Changelog = "https://github.com/JulienRabault/LLMock/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 dev = [
     "build>=1.2.2",

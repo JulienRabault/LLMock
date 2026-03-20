@@ -1,6 +1,7 @@
-![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)
-![License: MIT](https://img.shields.io/badge/license-MIT-green)
-![PyPI](https://img.shields.io/badge/pypi-llmock-orange?logo=pypi&logoColor=white)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![CI](https://github.com/JulienRabault/LLMock/actions/workflows/ci.yml/badge.svg)](https://github.com/JulienRabault/LLMock/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/JulienRabault/LLMock/blob/main/LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/JulienRabault/LLMock?style=social)](https://github.com/JulienRabault/LLMock/stargazers)
 
 # LLMock
 
@@ -310,6 +311,15 @@ LLMock is intended to ship on PyPI, with `llmock serve` as the primary entry poi
 - Maintainer checklist: [RELEASING.md](/C:/Users/julie/Documents/Code_space/LLMock/RELEASING.md)
 
 The release workflow builds the package, runs checks, generates GitHub release notes, and publishes to PyPI through trusted publishing.
+
+---
+
+## Community
+
+- Contribution guide: [CONTRIBUTING.md](/C:/Users/julie/Documents/Code_space/LLMock/CONTRIBUTING.md)
+- Code of conduct: [CODE_OF_CONDUCT.md](/C:/Users/julie/Documents/Code_space/LLMock/CODE_OF_CONDUCT.md)
+- Security policy: [SECURITY.md](/C:/Users/julie/Documents/Code_space/LLMock/SECURITY.md)
+- Release process: [RELEASING.md](/C:/Users/julie/Documents/Code_space/LLMock/RELEASING.md)
 
 ---
 
