@@ -51,6 +51,8 @@ jobs:
     name: Publish to PyPI
     needs: build
     runs-on: ubuntu-latest
+    env:
+      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
     environment:
       name: pypi
       url: https://pypi.org/project/llmock/
@@ -65,13 +67,13 @@ jobs:
           path: dist
 
       - name: Publish package to PyPI with Trusted Publishing
-        if: ${{ secrets.PYPI_API_TOKEN == '' }}
+        if: ${{ env.PYPI_API_TOKEN == '' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip_existing: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
 
       - name: Publish package to PyPI with token fallback
-        if: ${{ secrets.PYPI_API_TOKEN != '' }}
+        if: ${{ env.PYPI_API_TOKEN != '' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           user: __token__
