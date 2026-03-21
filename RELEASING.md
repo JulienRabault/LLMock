@@ -21,6 +21,7 @@ Official references:
 - Repository owner and repository name: match the GitHub repo exactly
 
 For a first release, configure the trusted publisher on PyPI before you push the release tag.
+If that is not ready yet, the workflow can temporarily fall back to a GitHub environment secret named `PYPI_API_TOKEN` on the `pypi` environment.
 
 ## First publish to PyPI
 
@@ -35,7 +36,8 @@ For a first release, configure the trusted publisher on PyPI before you push the
 3. Make sure the GitHub repository environment named `pypi` exists if you want to use environment protection rules later.
 4. Verify that [release.yml](/C:/Users/julie/Documents/Code_space/LLMock/.github/workflows/release.yml) still matches the PyPI trusted publisher settings exactly.
 
-If PyPI rejects the publish step, the first thing to check is that the repository name, workflow filename, branch/tag context, and environment name all match the trusted publisher registration exactly.
+If PyPI rejects the publish step with `invalid-publisher`, the first thing to check is that the repository name, workflow filename, and environment name all match the trusted publisher registration exactly.
+The current workflow also supports a temporary token fallback through the `PYPI_API_TOKEN` environment secret on GitHub.
 
 ## Optional dry run before real PyPI
 
@@ -51,7 +53,7 @@ You can also test the wheel in a fresh venv:
 
 ```bash
 python -m venv .venv-smoke
-.venv-smoke/bin/pip install dist/llmock-0.1.0-py3-none-any.whl
+.venv-smoke/bin/pip install dist/llmock-<version>-py3-none-any.whl
 .venv-smoke/bin/llmock --help
 ```
 
@@ -59,7 +61,7 @@ On Windows PowerShell:
 
 ```powershell
 python -m venv .venv-smoke
-.venv-smoke\Scripts\pip.exe install .\dist\llmock-0.1.0-py3-none-any.whl
+.venv-smoke\Scripts\pip.exe install .\dist\llmock-<version>-py3-none-any.whl
 .venv-smoke\Scripts\llmock.exe --help
 ```
 
@@ -91,9 +93,9 @@ python -m twine check (Get-ChildItem dist | ForEach-Object { $_.FullName })
 5. Create an annotated tag that matches the package version:
 
 ```bash
-git tag -a v0.1.0 -m "LLMock v0.1.0"
+git tag -a v<version> -m "LLMock v<version>"
 git push origin main
-git push origin v0.1.0
+git push origin v<version>
 ```
 
 6. Confirm that the GitHub `Release` workflow succeeds.
@@ -115,11 +117,11 @@ curl http://127.0.0.1:8000/health
 
 ## What the workflow does
 
-When you push a tag like `v0.1.0`, the GitHub Actions release workflow:
+When you push a tag like `v0.1.1`, the GitHub Actions release workflow:
 
 - installs release tooling
 - runs Ruff and pytest
 - builds the wheel and source distribution
 - checks package metadata with Twine
-- publishes the package to PyPI using trusted publishing
+- publishes the package to PyPI using trusted publishing, or falls back to `PYPI_API_TOKEN` if that secret is configured
 - creates a GitHub release with generated notes after PyPI succeeds

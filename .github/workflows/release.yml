@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
@@ -63,12 +64,25 @@ jobs:
           name: dist
           path: dist
 
-      - name: Publish package to PyPI
+      - name: Publish package to PyPI with Trusted Publishing
+        if: ${{ secrets.PYPI_API_TOKEN == '' }}
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip_existing: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+
+      - name: Publish package to PyPI with token fallback
+        if: ${{ secrets.PYPI_API_TOKEN != '' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          attestations: false
+          skip_existing: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
 
   github-release:
     name: Create GitHub release
     needs: publish-pypi
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
