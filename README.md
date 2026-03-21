@@ -35,8 +35,6 @@ Shipping an AI application means dealing with rate limits, timeouts, and upstrea
 pipx install llmock
 # fallback
 pip install llmock
-# or for local development
-pip install -e ".[dev]"
 ```
 
 `pipx` is the recommended install path for the CLI because it keeps `llmock` isolated while still exposing the command globally.
