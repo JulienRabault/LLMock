@@ -206,3 +206,7 @@ def cancel_message_batch(batch_id: str) -> dict:
 def get_message_batch_results(batch_id: str):
     batch = batch_support._get_batch(batch_id, provider="anthropic", kind="anthropic")
     return batch_support.PlainTextResponse(content=batch["results_content"], media_type="application/jsonl")
+
+
+from llmock.routers import registry as _registry
+_registry.register(router)

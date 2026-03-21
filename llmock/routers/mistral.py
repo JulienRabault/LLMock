@@ -244,3 +244,7 @@ def cancel_batch_job(job_id: str) -> dict:
     batch["completed_at"] = batch_support._now_iso()
     batch["done"] = True
     return _mistral_batch_payload(batch)
+
+
+from llmock.routers import registry as _registry
+_registry.register(router)

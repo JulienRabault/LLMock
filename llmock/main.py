@@ -5,16 +5,20 @@ from fastapi import FastAPI
 from llmock import __version__
 from llmock.chaos import ChaosMiddleware, ChaosSettings, chaos_settings
 from llmock.errors import register_error_handlers
-from llmock.routers import ai21 as ai21_router
-from llmock.routers import anthropic as anthropic_router
-from llmock.routers import cohere as cohere_router
-from llmock.routers import gemini as gemini_router
-from llmock.routers import groq as groq_router
-from llmock.routers import mistral as mistral_router
-from llmock.routers import openai as openai_router
-from llmock.routers import perplexity as perplexity_router
-from llmock.routers import together as together_router
-from llmock.routers import xai as xai_router
+
+# Import every router module so their registry.register() calls fire at import time.
+import llmock.routers.ai21  # noqa: F401
+import llmock.routers.anthropic  # noqa: F401
+import llmock.routers.cohere  # noqa: F401
+import llmock.routers.gemini  # noqa: F401
+import llmock.routers.groq  # noqa: F401
+import llmock.routers.mistral  # noqa: F401
+import llmock.routers.openai  # noqa: F401
+import llmock.routers.perplexity  # noqa: F401
+import llmock.routers.together  # noqa: F401
+import llmock.routers.xai  # noqa: F401
+
+from llmock.routers.registry import get_all_routers
 from llmock.simulation import MockResponseSettings
 
 
@@ -35,17 +39,10 @@ def create_app(
     app.state.mock_response_settings = response_settings
     register_error_handlers(app)
     app.add_middleware(ChaosMiddleware, settings=settings)
-    app.include_router(openai_router.router)
-    app.include_router(mistral_router.router)
-    app.include_router(anthropic_router.router)
-    app.include_router(gemini_router.router)
-    app.include_router(cohere_router.router)
-    app.include_router(cohere_router.legacy_router)
-    app.include_router(groq_router.router)
-    app.include_router(together_router.router)
-    app.include_router(perplexity_router.router)
-    app.include_router(ai21_router.router)
-    app.include_router(xai_router.router)
+
+    for router in get_all_routers():
+        app.include_router(router)
+
     @app.get("/health")
     def health() -> dict:
         return {"status": "ok", "version": __version__}

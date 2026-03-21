@@ -202,3 +202,7 @@ def delete_batch(batch_name: str):
     batch_support._get_batch(normalized, provider="gemini", kind="gemini")
     del batch_support._batches[normalized]
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+from llmock.routers import registry as _registry
+_registry.register(router)

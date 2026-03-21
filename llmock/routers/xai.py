@@ -248,3 +248,7 @@ def cancel_batch(batch_id: str) -> dict:
     batch["update_time"] = batch_support._now_iso()
     batch["done"] = True
     return _xai_batch_payload(batch)
+
+
+from llmock.routers import registry as _registry
+_registry.register(router)
