@@ -99,6 +99,47 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
+### 60-Second Smoke Test
+
+If you want one realistic end-to-end check, do this:
+
+1. install `openai` in the same environment as `llmock`
+2. start LLMock with `llmock serve --response-style hello`
+3. point the SDK at `http://127.0.0.1:8000/v1`
+4. force one error to validate your retry path too
+
+Success path:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="test",
+    base_url="http://127.0.0.1:8000/v1",
+)
+
+resp = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "hello from smoke test"}],
+)
+
+print(resp.choices[0].message.content)
+```
+
+Forced failure path:
+
+```bash
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "x-llmock-force-status: 503" \
+  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"force error"}]}'
+```
+
+Expected result:
+
+- the SDK call returns a normal mock completion
+- the forced call returns `503` with a provider-shaped error payload
+
 ## Important: Override The Provider URL
 
 LLMock does not intercept or proxy requests automatically. It only answers on its own local URLs.
