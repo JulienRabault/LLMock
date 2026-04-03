@@ -103,8 +103,9 @@ def build_mock_text(
             ]
         )
 
-    digest = hashlib.sha256(f"{model}|{prompt}".encode("utf-8")).digest()
-    template = templates[digest[0] % len(templates)]
+    # Use a cheap hash — we need determinism, not cryptographic strength.
+    idx = hash(f"{model}|{prompt}") % len(templates)
+    template = templates[idx]
     prompt_snippet = prompt[:80] if prompt else "your prompt"
     return template.format(model=model, prompt=prompt_snippet)
 

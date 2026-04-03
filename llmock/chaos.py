@@ -58,6 +58,10 @@ class ChaosSettings:
         status_code = self._status_code_from_attr(name)
         if status_code is not None:
             self._error_rates[status_code] = float(value)
+            # Keep the pre-sorted cache in sync.
+            object.__setattr__(
+                self, "_sorted_error_rates", sorted(self._error_rates.items())
+            )
             return
         object.__setattr__(self, name, value)
 
@@ -71,6 +75,10 @@ class ChaosSettings:
         for status, rate in rates.items():
             normalized[int(status)] = float(rate)
         object.__setattr__(self, "_error_rates", normalized)
+        # Pre-sort for _sample_error_status so we don't sort on every request.
+        object.__setattr__(
+            self, "_sorted_error_rates", sorted(normalized.items())
+        )
 
     @staticmethod
     def _status_code_from_attr(name: str) -> int | None:
@@ -180,7 +188,7 @@ class ChaosMiddleware(BaseHTTPMiddleware):
 def _sample_error_status(settings: ChaosSettings) -> int | None:
     r = random.random()
     cumulative = 0.0
-    for status, rate in sorted(settings.error_rates.items()):
+    for status, rate in settings._sorted_error_rates:
         cumulative += rate
         if r < cumulative:
             return status
