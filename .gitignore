@@ -37,6 +37,9 @@ htmlcov/
 # Internal agent files
 agents/
 
+# Marketing drafts (local only)
+marketing/
+
 # OS
 .DS_Store
 Thumbs.db
