@@ -43,9 +43,14 @@ print(client.chat.completions.create(
 
 ## Why LLMock?
 
-You need to test rate limits, timeouts, and 5xx handling — but you can't trigger them on demand against real APIs. Mocking at the HTTP client level (`unittest.mock`, `responses`) is fragile and doesn't test your actual code path.
+| Without LLMock | With LLMock |
+|---|---|
+| Waste real tokens to test retry logic | Test locally for free |
+| Flaky CI because upstream APIs go down | Deterministic, reproducible failures |
+| Hope your fallback code works in prod | Prove it works before deploying |
+| Mock at the HTTP client level (fragile) | Real HTTP server, real SDK calls |
 
-LLMock is a real HTTP server. Your SDK sends real requests, gets realistic responses (or errors), and exercises the same code that runs in production. It supports OpenAI, Anthropic, Mistral, and 7 other provider schemas.
+LLMock is a real HTTP server — not a library-level mock. Your SDK sends real requests, gets realistic responses (or errors), and exercises the same code that runs in production.
 
 ---
 
