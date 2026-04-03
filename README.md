@@ -9,42 +9,34 @@
 
 <h1 align="center">LLMock</h1>
 
-<p align="center"><strong>Chaos-test your LLM integration before production does.</strong></p>
-
 <p align="center">
-Local mock server for LLM SDKs and provider-native APIs.<br>
-Point your client at localhost, inject latency and failures, and test retries, fallbacks, and batch flows without spending tokens.
+Local mock server that speaks the same HTTP as OpenAI, Anthropic, and 8 other LLM providers.<br>
+Point your SDK at localhost, inject errors, and see if your retry logic actually works.
 </p>
 
 <p align="center"><img src="docs/assets/demo.svg" width="700" alt="LLMock demo" /></p>
 
 ---
 
-## Start Here
+## Try it
 
 ```bash
-pipx install llmock
-llmock serve --error-rate 429=0.3 --error-rate 503=0.1
+pip install llmock
+llmock serve --error-rate 429=0.3
 ```
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="mock-key")
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="anything")
 response = client.chat.completions.create(
     model="gpt-4o",
     messages=[{"role": "user", "content": "Hello!"}],
 )
 print(response.choices[0].message.content)
+# 70% of calls succeed. 30% raise RateLimitError.
+# Your tenacity/backoff wrapper either handles it or it doesn't.
 ```
-
-If your stack can override `base_url`, it can usually run against LLMock unchanged.
-
-Start from the page that matches your goal:
-
-- Want runnable demos? See [examples/README.md](examples/README.md)
-- Want implementation details? See [ARCHITECTURE.md](ARCHITECTURE.md)
-- Want to test a specific framework? Check `examples/langchain_retry.py`, `examples/llamaindex_pipeline.py`, and `examples/crewai_resilient_agents.py`
 
 ---
 
@@ -60,17 +52,13 @@ LLMock is built for failure-path work that tends to get skipped until it breaks 
 
 ---
 
-## Why It Beats a Generic Mock
+## Why not just `unittest.mock`?
 
-| Generic test double | LLMock |
-|---|---|
-| Replaces a client method in process | Runs as a real HTTP server |
-| Usually returns one hand-written error format | Returns provider-shaped error envelopes |
-| Hard to validate headers, status codes, and retry behavior | Your SDK sees the same HTTP layer it uses in production |
-| Often bypassed by framework wrappers | Works with SDKs and frameworks that only need a different base URL |
-| Rarely helpful for batch workflows | Simulates the async JSONL batch flow end-to-end |
+You can mock `client.chat.completions.create` and return a fake object. That tests your business logic, and that's fine.
 
-LLMock is most useful when you care about transport behavior, retries, fallback logic, and SDK integration points. It is less about faking "smart" model output and more about hardening the code around the model call.
+But it doesn't test the HTTP layer — retries, connection errors, status codes, `Retry-After` headers, provider-specific error payloads. If you use LangChain or LlamaIndex, the mock often gets bypassed entirely because the framework wraps the SDK call.
+
+LLMock runs as a real server. Your SDK builds a real request, sends it over HTTP, and parses a real response. The error payloads match what OpenAI, Anthropic, or Gemini actually return. If your retry logic works against LLMock, it'll work against the real API.
 
 ---
 
@@ -151,100 +139,29 @@ LLMock keeps the state in memory and moves batches through a realistic async lif
 
 ---
 
-## Features
+## At a glance
 
-### Protocol coverage
-
-- Chat completions for every supported provider
-- OpenAI-style models, embeddings, and image generation
-- Batch API simulation with file upload, creation, polling, download, and cancel
-
-### Failure simulation
-
-- Fixed latency with `--latency-ms`
-- Arbitrary `400-599` error probabilities with repeated `--error-rate STATUS=RATE`
-- One-shot forced failures with `x-llmock-force-status`
-- Provider-specific error payload shapes and retry headers where appropriate
-
-### Deterministic mock behavior
-
-- Response styles: `static`, `hello`, `echo`, `varied`
-- Stable mock text derived from model and prompt
-- Deterministic embeddings
-- Fake image payloads as SVG-backed data URIs
-
-### Integration-friendly
-
-- Works with raw SDKs plus wrappers such as LangChain, LlamaIndex, and CrewAI
-- Configurable from CLI flags, environment variables, or JSON/YAML config files
-- Testable through a regular local HTTP dependency instead of custom mocking glue
+- 10 provider schemas, each with its own error envelope format
+- Any HTTP status from 400 to 599, with per-status probabilities
+- Latency injection, forced errors via header, config files (JSON/YAML)
+- Batch API simulation with the full upload → poll → download lifecycle
+- 4 response styles: `static`, `hello`, `echo`, `varied`
+- 121 tests across providers, chaos, batch, CLI, and error shapes
 
 ---
 
-## Quick Start
-
-### Install
+## Install
 
 ```bash
-pipx install llmock
-# or
-pip install llmock
+pipx install llmock   # recommended: keeps it isolated
+pip install llmock    # also works
 ```
 
-### Start the server
-
-```bash
-llmock serve
-```
-
-Custom host and port:
-
-```bash
-llmock serve --host 0.0.0.0 --port 9001
-```
-
-From environment variables:
-
-```bash
-LLMOCK_HOST=0.0.0.0 LLMOCK_PORT=9001 llmock serve
-```
-
-From a config file:
-
-```bash
-llmock serve --config examples/llmock.example.yaml
-```
-
-Configuration precedence is:
-
-`CLI flags > environment variables > config file > defaults`
-
-### Verify it works
-
-```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/v1/models
-curl http://127.0.0.1:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Hello!"}]}'
-```
+`llmock serve` starts on `127.0.0.1:8000` by default. Use `--host`, `--port`, env vars, or a [config file](examples/llmock.example.yaml) to change that. Config precedence: CLI flags > env vars > config file > defaults.
 
 ---
 
-## SDK Examples
-
-### OpenAI
-
-```python
-from openai import OpenAI
-
-client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="mock-key")
-response = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Hello!"}],
-)
-print(response.choices[0].message.content)
-```
+## More SDK examples
 
 ### Anthropic
 
