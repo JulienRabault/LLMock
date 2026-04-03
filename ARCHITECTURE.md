@@ -2,215 +2,286 @@
 
 ## Overview
 
-LLMock is a zero-cost local mock server that presents OpenAI-compatible (and provider-native) HTTP APIs. Developers point their LLM SDK at `http://localhost:8000` instead of a real provider endpoint, then use environment variables or runtime settings to inject latency, rate-limit errors (429), and server errors (500 / 503). This lets integration tests exercise retry logic, backoff strategies, and error-handling paths without spending tokens or requiring network access.
+LLMock is a local FastAPI server for exercising LLM integration code under controlled failure conditions.
+
+The core design goal is straightforward:
+
+1. Accept real HTTP requests from real SDKs.
+2. Inject latency or provider-shaped failures before the handler runs.
+3. Return deterministic, schema-correct mock payloads for the requested provider.
+
+That makes LLMock useful for retry logic, fallback behavior, framework integration testing, and local demos where live providers would be expensive or flaky.
 
 ---
 
-## Request Flow
+## Runtime Model
 
-```
-Client (SDK / curl)
-        │
-        ▼
-┌───────────────────────────────────────────────┐
-│              FastAPI Application              │
-│                                               │
-│   ┌───────────────────────────────────────┐   │
-│   │          ChaosMiddleware              │   │
-│   │  (latency injection + error sampling) │   │
-│   └─────────────────┬─────────────────────┘   │
-│                     │                         │
-│   ┌─────────────────▼─────────────────────┐   │
-│   │            API Router                 │   │
-│   │  (provider-specific prefix & schema)  │   │
-│   └─────────────────┬─────────────────────┘   │
-│                     │                         │
-│   ┌─────────────────▼─────────────────────┐   │
-│   │          Mock Response                │   │
-│   │  (deterministic, schema-correct JSON) │   │
-│   └───────────────────────────────────────┘   │
-└───────────────────────────────────────────────┘
-        │
-        ▼
-Client receives response (or injected error)
-```
+Startup begins in `llmock/cli.py`:
 
-The `/health` endpoint bypasses the middleware entirely so monitoring systems remain reliable during chaos tests.
+1. Resolve config from JSON or YAML, if `--config` is provided.
+2. Overlay environment variables.
+3. Overlay explicit CLI flags.
+4. Export the resolved chaos and response settings back into environment variables.
+5. Launch `llmock.main:create_app` through Uvicorn in factory mode.
+
+Configuration precedence is:
+
+`CLI flags > environment variables > config file > defaults`
 
 ---
 
-## Chaos Middleware
+## Request Lifecycle
 
-**File:** `llmock/chaos.py`
-
-### `ChaosSettings` dataclass
-
-```python
-@dataclass
-class ChaosSettings:
-    latency_ms: int = 0
-    error_rate_429: float = 0.0
-    error_rate_500: float = 0.0
-    error_rate_503: float = 0.0
+```text
+SDK / curl / framework
+        |
+        v
+  FastAPI app created by llmock.main:create_app
+        |
+        v
+  ChaosMiddleware
+    - bypass /health
+    - honor x-llmock-force-status
+    - sleep for latency_ms
+    - sample configured error rates
+        |
+        v
+  Provider router
+    - validate request shape
+    - build deterministic payload
+    - return provider-specific response model
+        |
+        v
+  HTTP response back to the client
 ```
 
-Loaded from environment variables at startup via `ChaosSettings.from_env()`:
-
-| Variable              | Default | Effect                                      |
-|-----------------------|---------|---------------------------------------------|
-| `LLMOCK_LATENCY_MS`   | `0`     | Fixed delay added before every response     |
-| `LLMOCK_ERROR_RATE_429` | `0.0` | Probability (0–1) of returning a 429        |
-| `LLMOCK_ERROR_RATE_500` | `0.0` | Probability (0–1) of returning a 500        |
-| `LLMOCK_ERROR_RATE_503` | `0.0` | Probability (0–1) of returning a 503        |
-
-Each app instance receives a `ChaosSettings` object through `create_app(chaos=...)`. The module-level `chaos_settings` value is only used to build the default exported `app`.
-
-### Sampling Logic
-
-On each request the middleware:
-
-1. Sleeps for `latency_ms / 1000` seconds (if > 0).
-2. Draws a single random float `r ∈ [0, 1)`.
-3. Walks error rates in priority order `429 → 503 → 500`, accumulating a cumulative probability. If `r < cumulative`, returns that error immediately.
-
-This cumulative approach means rates are additive and predictable: setting all three to `0.33` gives roughly equal chance of each error and ~1% pass-through.
+The important property is that the client still performs a normal HTTP request. LLMock is not replacing your SDK internals or monkeypatching transport code.
 
 ---
 
-## Router Pattern
+## Main Modules
 
-**Directory:** `llmock/routers/`
+### `llmock/cli.py`
 
-Each provider has its own Python module with a consistent structure:
+Responsible for:
 
-```
-llmock/routers/
-├── openai.py       # /v1/...  (OpenAI-compatible)
-├── anthropic.py    # /anthropic/v1/...
-├── mistral.py      # /v1/...  (Mistral-compatible)
-├── gemini.py       # /v1beta/models/...
-├── cohere.py       # /v2/...
-├── groq.py         # /openai/v1/...
-├── together.py     # /together/v1/...
-├── perplexity.py   # /pplx/v1/...
-├── ai21.py         # /ai21/v1/...
-├── xai.py          # /xai/v1/...
-└── batch.py        # /v1/files, /v1/batches (Batch API)
-```
+- Parsing CLI options
+- Reading JSON and YAML config files
+- Merging config, environment, and flags
+- Printing the active startup settings
+- Booting Uvicorn
 
-### Module structure (example: `openai.py`)
+The CLI supports:
 
-```python
-from fastapi import APIRouter
-from pydantic import BaseModel
+- `--host`, `--port`
+- `--latency-ms`
+- repeated `--error-rate STATUS=RATE`
+- shortcut flags `--error-rate-429`, `--error-rate-500`, `--error-rate-503`
+- `--response-style`
+- `--config`
 
-router = APIRouter(prefix="/v1", tags=["openai"])
+### `llmock/main.py`
 
-# 1. Request models (Pydantic)
-class ChatCompletionRequest(BaseModel): ...
+Responsible for:
 
-# 2. Response models (Pydantic)
-class ChatCompletionResponse(BaseModel): ...
+- Creating the FastAPI app
+- Registering error handlers
+- Attaching the chaos middleware
+- Importing provider modules so their router registration side effects run
+- Mounting every registered router
+- Exposing `/health`
 
-# 3. Endpoint handlers
-@router.post("/chat/completions", response_model=ChatCompletionResponse)
-def chat_completions(request: ChatCompletionRequest) -> ChatCompletionResponse:
-    # Build and return a deterministic mock response
-    ...
-```
+### `llmock/chaos.py`
 
-Routers are registered in `llmock/main.py` via `app.include_router(...)`.
+Responsible for:
+
+- Holding runtime chaos settings
+- Reading and validating error rates
+- Injecting latency
+- Sampling arbitrary HTTP error statuses from `400` to `599`
+- Returning provider-shaped error responses before the request reaches the handler
+
+### `llmock/simulation.py`
+
+Responsible for:
+
+- Building deterministic mock text
+- Estimating token counts
+- Building deterministic embeddings
+- Building fake image payloads
+- Mapping request paths to provider names for error-shape generation
+- Converting provider-specific failures into JSON responses
+
+### `llmock/routers/`
+
+Each router module defines one provider surface and the request and response models needed for that provider.
+
+Today that includes:
+
+- OpenAI
+- Anthropic
+- Mistral
+- Cohere
+- Gemini
+- Groq
+- Together AI
+- Perplexity
+- AI21
+- xAI
+- Batch endpoints shared through the OpenAI-compatible surface
+
+---
+
+## Router Registration Pattern
+
+LLMock uses a lightweight registry in `llmock/routers/registry.py`.
+
+The pattern works like this:
+
+1. A provider module creates one or more `APIRouter` instances.
+2. The module calls `registry.register(router)` at import time.
+3. `llmock.main` imports every provider module once so those registrations happen.
+4. `create_app()` calls `get_all_routers()` and mounts the collected routers.
+
+This avoids repetitive `app.include_router(...)` boilerplate for every route object while still keeping provider modules isolated.
+
+One tradeoff is that new provider modules still need to be imported in `llmock/main.py`, otherwise their registration side effect will never run.
+
+---
+
+## Chaos Semantics
+
+`ChaosSettings` supports:
+
+- `latency_ms`
+- explicit `error_rates={status: probability}`
+- shortcut keyword arguments such as `error_rate_429=0.3`
+- dynamic status assignment like `error_rate_451=0.1`
+
+Validation rules:
+
+- latency must be `>= 0`
+- statuses must be within `400-599`
+- each rate must be between `0.0` and `1.0`
+- total probability across all configured errors must be `<= 1.0`
+
+Request handling rules:
+
+- `/health` always bypasses chaos
+- `x-llmock-force-status` forces one request to return a specific error immediately
+- latency is applied before error sampling
+- error sampling walks configured statuses in ascending order and returns the first cumulative match
+
+The last point matters because LLMock supports arbitrary error codes, not just `429`, `500`, and `503`.
+
+---
+
+## Mock Response Generation
+
+`llmock/simulation.py` provides deterministic helpers that keep the output stable enough for tests.
+
+### Text responses
+
+`build_mock_text()` supports four styles:
+
+- `static`
+- `hello`
+- `echo`
+- `varied`
+
+The `varied` mode hashes the model plus prompt so the same input produces the same response pattern.
+
+### Embeddings
+
+`build_mock_embedding()` derives a seeded pseudo-random vector from the input text hash. This keeps embeddings deterministic while still looking realistic enough for integration tests.
+
+### Images
+
+OpenAI-style image generation returns SVG-backed data URIs so image workflows have something concrete to process without requiring binary asset generation.
+
+### Token usage
+
+LLMock estimates token counts from flattened text so response payloads contain plausible `usage` fields.
+
+### Streaming
+
+Streaming is intentionally unsupported. Requests that set `stream=true` receive `501 Not Implemented`.
+
+This avoids a deceptive half-implementation where clients appear to work but their stream iterators hang forever.
+
+---
+
+## Error Shape Simulation
+
+When chaos injects an error, LLMock chooses the error envelope based on the request path.
+
+Examples:
+
+- `/v1/...` uses an OpenAI-style error object
+- `/anthropic/...` uses an Anthropic-style error object
+- `/gemini/...` uses a Gemini-style error object
+
+This is one of the main reasons LLMock is more useful than a generic mock server. Your client and framework wrappers see the provider-specific error shape they expect.
 
 ---
 
 ## Batch API Simulation
 
-**File:** `llmock/routers/batch.py`
+The OpenAI-compatible batch flow lives in `llmock/routers/batch.py`.
 
-Simulates the full OpenAI Batch API async JSONL workflow:
+Supported flow:
 
-| Step | Request | Description |
-|------|---------|-------------|
-| 1 | `POST /v1/files` | Upload a JSONL request file |
-| 2 | `POST /v1/batches` | Create a batch job referencing the file |
-| 3 | `GET /v1/batches/{id}` | Poll status (`validating → in_progress → completed`) |
-| 4 | `GET /v1/files/{id}/content` | Download the JSONL results file |
-| 5 | `POST /v1/batches/{id}/cancel` | Cancel an in-progress batch |
+1. `POST /v1/files`
+2. `POST /v1/batches`
+3. `GET /v1/batches/{id}`
+4. `GET /v1/files/{id}/content`
+5. `POST /v1/batches/{id}/cancel`
 
-All state is held in in-memory dictionaries (`_files`, `_batches`). Batches complete automatically after a configurable delay (`_BATCH_DELAY`, default 3 s) via a FastAPI `BackgroundTasks` coroutine.
+Implementation notes:
 
----
-
-## Adding a New Provider
-
-1. **Create the router file** at `llmock/routers/myprovider.py`:
-
-```python
-from fastapi import APIRouter
-from pydantic import BaseModel
-
-router = APIRouter(prefix="/myprovider/v1", tags=["myprovider"])
-
-class MyRequest(BaseModel):
-    model: str
-    prompt: str
-
-@router.post("/generate")
-def generate(request: MyRequest) -> dict:
-    return {
-        "id": "mock-id",
-        "model": request.model,
-        "output": f"Mock response from {request.model}.",
-    }
-```
-
-2. **Register the router** in `llmock/main.py`:
-
-```python
-from llmock.routers import myprovider as myprovider_router
-# ...
-app.include_router(myprovider_router.router)
-```
-
-3. **Add tests** in `tests/test_myprovider.py`:
-
-```python
-from fastapi.testclient import TestClient
-from llmock.main import create_app
-
-client = TestClient(create_app())
-
-def test_generate():
-    r = client.post("/myprovider/v1/generate", json={"model": "my-model-1", "prompt": "Hello"})
-    assert r.status_code == 200
-    assert r.json()["model"] == "my-model-1"
-```
+- file and batch state lives in in-memory dictionaries
+- batch completion is simulated asynchronously
+- results are exposed as JSONL content
+- the behavior is designed to exercise orchestration code, not to mimic provider throughput precisely
 
 ---
 
-## Test Architecture
+## Testing Strategy
 
-**Directory:** `tests/`
+The test suite is intentionally broad for a small codebase.
 
-```
-tests/
-├── test_openai.py       # OpenAI chat completions, embeddings, models
-├── test_anthropic.py    # Anthropic Messages API
-├── test_mistral.py      # Mistral chat completions
-├── test_providers.py    # Gemini, Cohere, Groq, Together, Perplexity, AI21, xAI
-├── test_batch.py        # Full Batch API workflow (upload → create → poll → results)
-└── test_chaos.py        # ChaosMiddleware latency and error injection
-```
+It covers:
 
-### Key patterns
+- provider endpoints
+- provider-specific error shapes
+- chaos middleware behavior
+- CLI config precedence
+- response style behavior
+- batch workflows
 
-- **`TestClient`** (synchronous): All tests use `fastapi.testclient.TestClient` wrapping `create_app()`. This avoids the async overhead of `httpx.AsyncClient` while remaining ASGI-compatible.
-- **`create_app(chaos=...)`**: The app factory accepts an optional `ChaosSettings` argument, allowing tests to inject specific chaos configurations without touching global state or environment variables.
-- **Direct state injection**: Batch API tests that need a specific pre-condition (e.g., `in_progress` status) write directly into the router's `_batches` dict rather than racing against background tasks.
+Testing patterns:
 
-### Running tests
+- `fastapi.testclient.TestClient` for synchronous endpoint tests
+- `httpx.AsyncClient` with `ASGITransport` where async behavior matters
+- direct `create_app()` construction so tests can inject custom settings cleanly
+
+Run the suite with:
 
 ```bash
-pip install -e ".[dev]"
 pytest
 ```
+
+---
+
+## Extending LLMock
+
+To add a new provider:
+
+1. Create a new router module under `llmock/routers/`.
+2. Define request and response models for that provider.
+3. Register the router with `registry.register(...)`.
+4. Import the new module in `llmock/main.py`.
+5. Add endpoint tests and error-shape tests.
+6. Update the README and examples if the provider is user-facing.
+
+That keeps the public docs, runtime surface, and tests aligned.
