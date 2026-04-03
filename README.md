@@ -16,8 +16,7 @@ Local mock server for 10 LLM providers with configurable chaos — latency, rate
 Test your retry logic and fallback paths without calling a real API.
 </p>
 
-<!-- TODO: replace with actual GIF/SVG recording (use `vhs` or `asciinema`) -->
-<!-- <p align="center"><img src="docs/assets/demo.gif" width="600" alt="LLMock demo" /></p> -->
+<p align="center"><img src="docs/assets/demo.svg" width="700" alt="LLMock demo" /></p>
 
 ---
 
