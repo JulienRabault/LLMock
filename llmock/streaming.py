@@ -27,6 +27,7 @@ from llmock.completion import Completion
 
 __all__ = [
     "anthropic_events",
+    "fragments",
     "cohere_events",
     "gemini_chunk_dicts",
     "gemini_chunks",
@@ -62,7 +63,7 @@ def text_pieces(text: str) -> list[str]:
     return pieces if "".join(pieces) == text else [text]
 
 
-def _fragments(value: str, size: int = _ARGUMENT_FRAGMENT) -> list[str]:
+def fragments(value: str, size: int = _ARGUMENT_FRAGMENT) -> list[str]:
     return [value[i : i + size] for i in range(0, len(value), size)] or [""]
 
 
@@ -114,7 +115,7 @@ def openai_chat_chunks(
                 "type": "function",
                 "function": {"name": call.name, "arguments": ""},
             }]})])
-            for fragment in _fragments(call.arguments):
+            for fragment in fragments(call.arguments):
                 yield chunk([choice(index, {"tool_calls": [{
                     "index": position,
                     "function": {"arguments": fragment},
@@ -168,7 +169,7 @@ def anthropic_events(completion: Completion, *, message_id: str, model: str) -> 
         yield sse({"type": "content_block_start", "index": block, "content_block": {
             "type": "tool_use", "id": call.id, "name": call.name, "input": {},
         }}, event="content_block_start")
-        for fragment in _fragments(call.arguments):
+        for fragment in fragments(call.arguments):
             yield sse({"type": "content_block_delta", "index": block,
                        "delta": {"type": "input_json_delta", "partial_json": fragment}},
                       event="content_block_delta")
@@ -258,7 +259,7 @@ def cohere_events(completion: Completion, *, message_id: str) -> Iterator[bytes]
             "tool_calls": {"id": call.id, "type": "function",
                            "function": {"name": call.name, "arguments": ""}},
         }}})
-        for fragment in _fragments(call.arguments):
+        for fragment in fragments(call.arguments):
             yield event({"type": "tool-call-delta", "index": position, "delta": {"message": {
                 "tool_calls": {"function": {"arguments": fragment}},
             }}})

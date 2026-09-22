@@ -19,6 +19,7 @@ import llmock.routers.gemini  # noqa: F401
 import llmock.routers.groq  # noqa: F401
 import llmock.routers.mistral  # noqa: F401
 import llmock.routers.openai  # noqa: F401
+import llmock.routers.openai_responses  # noqa: F401
 import llmock.routers.perplexity  # noqa: F401
 import llmock.routers.together  # noqa: F401
 import llmock.routers.xai  # noqa: F401
