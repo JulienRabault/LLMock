@@ -29,15 +29,13 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from llmock.routers import batch as batch_support
+from llmock.routers._chat import complete, is_streaming, openai_stream, prompt_of
 from llmock.simulation import (
     DEFAULT_IMAGE_SIZE,
     MockResponseSettings,
     build_fake_image_payload,
     build_mock_embedding,
-    build_mock_text,
     estimate_tokens,
-    flatten_text,
-    raise_if_streaming,
 )
 
 router = APIRouter(prefix="/v1", tags=["openai"])
@@ -45,8 +43,12 @@ router = APIRouter(prefix="/v1", tags=["openai"])
 
 class ChatMessage(BaseModel):
     role: str
-    content: str | list[Any]
+    # None is legitimate: an assistant message that only calls tools has no
+    # content, and agent loops send that message back on the next turn.
+    content: str | list[Any] | None = None
     name: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
 
 
 class ChatCompletionRequest(BaseModel):
@@ -72,9 +74,27 @@ class ImageGenerationRequest(BaseModel):
     response_format: Literal["url", "b64_json"] = "url"
 
 
+class ToolCallFunction(BaseModel):
+    name: str
+    arguments: str
+
+
+class ToolCallModel(BaseModel):
+    id: str
+    type: str = "function"
+    function: ToolCallFunction
+
+
+class AssistantMessage(BaseModel):
+    role: str = "assistant"
+    content: str | None = None
+    tool_calls: list[ToolCallModel] | None = None
+    refusal: str | None = None
+
+
 class ChatCompletionChoice(BaseModel):
     index: int
-    message: ChatMessage
+    message: AssistantMessage
     finish_reason: str = "stop"
 
 
@@ -150,21 +170,26 @@ def list_models() -> ModelList:
 
 
 @router.post("/chat/completions", response_model=ChatCompletionResponse)
-def chat_completions(request: Request, body: ChatCompletionRequest) -> ChatCompletionResponse:
-    raise_if_streaming(body.stream)
-    prompt_text = " ".join(flatten_text(message.content) for message in body.messages)
-    prompt_tokens = estimate_tokens(*(message.content for message in body.messages))
-    reply_text = build_mock_text(
-        settings=_response_settings(request),
-        model=body.model,
-        prompt=prompt_text,
+def chat_completions(request: Request, body: ChatCompletionRequest):
+    prompt_text, prompt_tokens = prompt_of(body.messages)
+    completion = complete(
+        request, model=body.model, prompt_text=prompt_text, prompt_tokens=prompt_tokens
     )
-    completion_tokens = estimate_tokens(reply_text)
+    if is_streaming(request):
+        return openai_stream(request, completion, model=body.model, choices=body.n)
 
+    tool_calls = [
+        ToolCallModel(id=c.id, function=ToolCallFunction(name=c.name, arguments=c.arguments))
+        for c in completion.tool_calls
+    ] or None
     choices = [
         ChatCompletionChoice(
             index=index,
-            message=ChatMessage(role="assistant", content=reply_text),
+            message=AssistantMessage(
+                content=completion.text if completion.text or not tool_calls else None,
+                tool_calls=tool_calls,
+            ),
+            finish_reason=completion.finish_reason,
         )
         for index in range(body.n)
     ]
@@ -172,9 +197,9 @@ def chat_completions(request: Request, body: ChatCompletionRequest) -> ChatCompl
         model=body.model,
         choices=choices,
         usage=Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens=completion.prompt_tokens,
+            completion_tokens=completion.completion_tokens,
+            total_tokens=completion.total_tokens,
         ),
     )
 

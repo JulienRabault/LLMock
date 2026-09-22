@@ -49,18 +49,6 @@ def test_openai_422_validation_error(client):
     assert body["error"]["type"] == "invalid_request_error"
 
 
-def test_openai_stream_returns_501(client):
-    resp = client.post(
-        "/v1/chat/completions",
-        json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], "stream": True},
-    )
-    assert resp.status_code == 501
-    body = resp.json()
-    assert "error" in body
-    assert body["error"]["type"] == "server_error"
-    assert "stream" in body["error"]["message"].lower()
-
-
 # ---------------------------------------------------------------------------
 # Anthropic error format (/anthropic/v1/*)
 # ---------------------------------------------------------------------------

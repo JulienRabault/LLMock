@@ -92,10 +92,47 @@ class LLMockMiddleware:
         # behaviours: they are meant for requests that actually get handled.
         error = _forced_error(headers)
         plan = Plan() if error is not None else self.state.scenarios.plan_for(info)
-        scope.setdefault("state", {})["llmock_plan"] = plan
+        request_state = scope.setdefault("state", {})
+        request_state["llmock_plan"] = plan
+        request_state["llmock_info"] = info
+        # Handlers read fields their pydantic model does not declare (e.g.
+        # stream_options) from here, instead of every model redeclaring them.
+        request_state["llmock_body"] = body if isinstance(body, dict) else {}
 
-        tracker = _Tracker(send, plan)
-        seq = self.state.journal.next_seq()
+        journal = self.state.journal
+        ticket = journal.begin()
+        recorded = False
+
+        def journal_once() -> None:
+            # Called just *before* the last byte goes out, so a client can
+            # never see a response end while its record is still missing.
+            nonlocal recorded
+            if recorded:
+                return
+            recorded = True
+            journal.add(
+                RequestRecord(
+                    seq=ticket.seq,
+                    provider=info.provider,
+                    method=method,
+                    path=path,
+                    started_at=started_at,
+                    ended_at=time.monotonic(),
+                    status=tracker.status,
+                    fingerprint=fingerprint(method, path, body if body is not None else raw_body),
+                    model=info.model,
+                    stream=info.stream,
+                    fault=tracker.fault,
+                    retry_after=tracker.retry_after,
+                    completed=tracker.completed and tracker.fault_kind != "truncate",
+                    chunks_sent=tracker.chunks,
+                    sdk_retry_count=_int_or_none(headers.get("x-stainless-retry-count")),
+                    body=body if len(raw_body) <= _MAX_JOURNALED_BODY else None,
+                ),
+                ticket,
+            )
+
+        tracker = _Tracker(send, plan, on_final=journal_once)
         try:
             if error is None:
                 await self._wait(plan)
@@ -115,26 +152,9 @@ class LLMockMiddleware:
             if not tracker.completed:
                 _intentional_abort.set(True)
         finally:
-            self.state.journal.add(
-                RequestRecord(
-                    seq=seq,
-                    provider=info.provider,
-                    method=method,
-                    path=path,
-                    started_at=started_at,
-                    ended_at=time.monotonic(),
-                    status=tracker.status,
-                    fingerprint=fingerprint(method, path, body if body is not None else raw_body),
-                    model=info.model,
-                    stream=info.stream,
-                    fault=tracker.fault,
-                    retry_after=tracker.retry_after,
-                    completed=tracker.completed and tracker.fault_kind != "truncate",
-                    chunks_sent=tracker.chunks,
-                    sdk_retry_count=_int_or_none(headers.get("x-stainless-retry-count")),
-                    body=body if len(raw_body) <= _MAX_JOURNALED_BODY else None,
-                )
-            )
+            # Disconnects and handler errors never reach a final message.
+            journal_once()
+            journal.end(ticket)
 
     async def _wait(self, plan: Plan) -> None:
         seconds = self.state.chaos.latency_ms / 1000.0
@@ -147,9 +167,10 @@ class LLMockMiddleware:
 class _Tracker:
     """Wraps ``send``: observes the response and applies stream faults."""
 
-    def __init__(self, send: Send, plan: Plan) -> None:
+    def __init__(self, send: Send, plan: Plan, on_final: Callable[[], None]) -> None:
         self._send = send
         self._plan = plan
+        self._on_final = on_final
         self._is_sse = False
         self._stalled = False
         self.status = 500
@@ -188,9 +209,10 @@ class _Tracker:
         elif body:
             self.chunks += 1
 
-        await self._send(message)
         if not more_body:
             self.completed = True
+            self._on_final()
+        await self._send(message)
 
     async def _before_chunk(self) -> None:
         slow = self._plan.slow_first_token
@@ -214,8 +236,9 @@ class _Tracker:
         if fault.kind == "truncate":
             # End the HTTP response cleanly: to the client this looks like a
             # normal end of stream, just without a finish reason or terminator.
-            await self._send({"type": "http.response.body", "body": b"", "more_body": False})
             self.completed = True
+            self._on_final()
+            await self._send({"type": "http.response.body", "body": b"", "more_body": False})
         raise StreamAborted(fault.kind)
 
     def _record(self, fault: StreamFault) -> None:
