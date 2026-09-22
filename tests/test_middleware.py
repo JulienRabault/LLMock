@@ -254,3 +254,14 @@ def test_admin_reset_clears_journal_and_queue(client):
     client.post("/_llmock/reset")
     assert client.get("/_llmock/requests").json()["count"] == 0
     assert client.get("/_llmock/scenario").json()["pending"] == []
+
+
+def test_admin_exposes_the_verdict(client):
+    client.post("/_llmock/scenario", json={"behaviors": [{"type": "fail", "status": 401}]})
+    for _ in range(2):
+        client.post("/v1/chat/completions", json=CHAT)
+    data = client.get("/_llmock/verdict").json()
+    assert data["passed"] is False
+    assert data["findings"][0]["code"] == "retried_non_retryable"
+    text = client.get("/_llmock/verdict?format=text").text
+    assert "retried_non_retryable" in text and "FAIL" in text

@@ -127,6 +127,7 @@ class LLMockMiddleware:
                     completed=tracker.completed and tracker.fault_kind != "truncate",
                     chunks_sent=tracker.chunks,
                     sdk_retry_count=_int_or_none(headers.get("x-stainless-retry-count")),
+                    stall_waited=tracker.stall_waited,
                     body=body if len(raw_body) <= _MAX_JOURNALED_BODY else None,
                 ),
                 ticket,
@@ -179,6 +180,7 @@ class _Tracker:
         self.completed = False
         self.fault: str | None = None
         self.fault_kind: str | None = None
+        self.stall_waited: float | None = None
 
     async def send(self, message: Message) -> None:
         if message["type"] == "http.response.start":
@@ -225,7 +227,13 @@ class _Tracker:
             if not self._stalled:
                 self._stalled = True
                 self._record(fault)
-                await asyncio.sleep(fault.stall_seconds)
+                started = time.monotonic()
+                try:
+                    await asyncio.sleep(fault.stall_seconds)
+                finally:
+                    # Set even when cancelled: a client that hangs up early
+                    # waited less than the full stall, which is the point.
+                    self.stall_waited = time.monotonic() - started
             return message
 
         if fault.kind == "malformed":

@@ -8,7 +8,8 @@ suite can queue a scenario, run its code, then read back what happened::
     DELETE /_llmock/scenario   drop them
     GET    /_llmock/requests   every request served, oldest first
     DELETE /_llmock/requests   forget them
-    POST   /_llmock/reset      both of the above
+    GET    /_llmock/verdict    how well the client coped (?format=text for a report)
+    POST   /_llmock/reset      forget requests and queued behaviours
 
 These routes bypass chaos and are never journaled.
 """
@@ -18,9 +19,15 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 
 from llmock.scenarios import behavior_from_dict, behavior_to_dict
 from llmock.state import LLMockState
+from llmock.verdict import judge
+
+# How long a read waits for requests still in flight (e.g. a stream the
+# client stopped reading at [DONE]) before answering with what it has.
+_WAIT_SECONDS = 2.0
 
 __all__ = ["router"]
 
@@ -59,7 +66,7 @@ def clear_scenario(request: Request) -> dict[str, Any]:
 
 @router.get("/requests")
 def list_requests(request: Request) -> dict[str, Any]:
-    records = _state(request).journal.records()
+    records = _state(request).journal.records(wait=_WAIT_SECONDS)
     return {"count": len(records), "requests": [r.to_dict() for r in records]}
 
 
@@ -67,6 +74,14 @@ def list_requests(request: Request) -> dict[str, Any]:
 def clear_requests(request: Request) -> dict[str, Any]:
     _state(request).journal.clear()
     return {"count": 0}
+
+
+@router.get("/verdict", response_model=None)
+def verdict(request: Request, format: str = "json"):
+    result = judge(_state(request).journal.records(wait=_WAIT_SECONDS))
+    if format == "text":
+        return PlainTextResponse(result.render())
+    return result.to_dict()
 
 
 @router.post("/reset")

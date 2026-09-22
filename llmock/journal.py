@@ -38,6 +38,8 @@ class RequestRecord:
     completed: bool = True
     chunks_sent: int = 0
     sdk_retry_count: int | None = None
+    stall_waited: float | None = None
+    """Seconds the client sat through a scripted stall before it ended or gave up."""
     body: Any = None
 
     @property
