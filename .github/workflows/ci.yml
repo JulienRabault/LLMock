@@ -51,7 +51,9 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: python -m pip install -e ".[dev]"
+        # e2e brings the real provider SDKs, so streaming faults are checked
+        # against the clients people actually use, on every OS in the matrix.
+        run: python -m pip install -e ".[dev,e2e]"
 
       - name: Run tests
         run: pytest

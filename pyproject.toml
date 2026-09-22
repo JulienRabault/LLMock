@@ -55,6 +55,13 @@ dev = [
     "ruff>=0.6.0",
     "twine>=5.1.1",
 ]
+# The real provider SDKs, for end-to-end tests that drive LLMock the way an
+# application does. Kept apart from "dev" because they are heavy.
+e2e = [
+    "openai>=3",
+    "anthropic>=1",
+    "google-genai>=2",
+]
 
 [tool.hatch.version]
 path = "llmock/__init__.py"
