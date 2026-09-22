@@ -64,6 +64,8 @@ class Match:
     path: str | None = None
     model: str | None = None
     stream: bool | None = None
+    tools: bool | None = None
+    """Whether the request offers tools."""
 
     def accepts(self, info: RequestInfo) -> bool:
         if self.provider is not None and self.provider != info.provider:
@@ -71,6 +73,8 @@ class Match:
         if self.path is not None and not fnmatch.fnmatchcase(info.path, self.path):
             return False
         if self.model is not None and not fnmatch.fnmatchcase(info.model or "", self.model):
+            return False
+        if self.tools is not None and self.tools != info.has_tools:
             return False
         return self.stream is None or self.stream == info.stream
 
@@ -175,11 +179,17 @@ class Reply:
 
 @dataclass(frozen=True)
 class ToolFault:
-    """Emit a broken tool call, to test how an agent loop copes."""
+    """Emit a broken tool call, to test how an agent loop copes.
+
+    - ``malformed_arguments``: the arguments are not valid JSON.
+    - ``unknown_tool``: the model calls a tool that was never offered.
+
+    Waits for a request that offers tools, by default.
+    """
 
     kind: ToolFaultKind
     times: int | None = 1
-    match: Match = ANY
+    match: Match = field(default_factory=lambda: Match(tools=True))
 
     def __post_init__(self) -> None:
         if self.kind not in ("malformed_arguments", "unknown_tool"):

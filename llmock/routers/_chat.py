@@ -15,8 +15,8 @@ from typing import Any
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
-from llmock.completion import Completion, plan_of, resolve
-from llmock.simulation import MockResponseSettings, estimate_tokens, flatten_text
+from llmock.completion import Completion, resolve_request
+from llmock.simulation import estimate_tokens, flatten_text
 from llmock.streaming import openai_chat_chunks, sse_response
 
 __all__ = [
@@ -54,13 +54,8 @@ def prompt_of(messages: Iterable[Any]) -> tuple[str, int]:
 
 
 def complete(request: Request, *, model: str, prompt_text: str, prompt_tokens: int) -> Completion:
-    settings: MockResponseSettings = request.app.state.mock_response_settings
-    return resolve(
-        plan=plan_of(request),
-        settings=settings,
-        model=model,
-        prompt_text=prompt_text,
-        prompt_tokens=prompt_tokens,
+    return resolve_request(
+        request, model=model, prompt_text=prompt_text, prompt_tokens=prompt_tokens
     )
 
 

@@ -23,7 +23,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from llmock.routers import batch as batch_support
-from llmock.completion import plan_of, resolve
+from llmock.completion import resolve_request
 from llmock.routers._chat import is_streaming
 from llmock.simulation import MockResponseSettings, estimate_tokens, flatten_text
 from llmock.streaming import COHERE_FINISH, cohere_events, cohere_usage, sse_response
@@ -114,9 +114,8 @@ def list_models() -> ModelList:
 @router.post("/chat", response_model=ChatResponse)
 def chat(request: Request, body: ChatRequest):
     contents = [m.content for m in body.messages if m.content is not None]
-    completion = resolve(
-        plan=plan_of(request),
-        settings=_response_settings(request),
+    completion = resolve_request(
+        request,
         model=body.model,
         prompt_text=" ".join(flatten_text(c) for c in contents),
         prompt_tokens=estimate_tokens(*contents),

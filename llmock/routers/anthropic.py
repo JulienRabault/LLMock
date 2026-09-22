@@ -24,7 +24,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from llmock.routers import batch as batch_support
-from llmock.completion import plan_of, resolve
+from llmock.completion import resolve_request
 from llmock.routers._chat import is_streaming
 from llmock.simulation import MockResponseSettings, estimate_tokens, flatten_text
 from llmock.streaming import anthropic_events, sse_response
@@ -123,9 +123,8 @@ _STOP_REASONS = {"stop": "end_turn", "length": "max_tokens", "tool_calls": "tool
 def create_message(request: Request, body: MessagesRequest):
     prompt_text = " ".join(flatten_text(message.content) for message in body.messages)
     input_tokens = estimate_tokens(*(message.content for message in body.messages), body.system or "")
-    completion = resolve(
-        plan=plan_of(request),
-        settings=_response_settings(request),
+    completion = resolve_request(
+        request,
         model=body.model,
         prompt_text=prompt_text,
         prompt_tokens=input_tokens,

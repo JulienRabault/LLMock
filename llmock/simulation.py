@@ -16,6 +16,7 @@ from typing import Any
 from starlette.responses import JSONResponse
 
 SUPPORTED_RESPONSE_STYLES = {"static", "hello", "echo", "varied"}
+SUPPORTED_TOOL_MODES = {"auto", "off"}
 DEFAULT_IMAGE_SIZE = "1024x1024"
 ERROR_RATE_ENV_PREFIX = "LLMOCK_ERROR_RATE_"
 SUPPORTED_ERROR_STATUS_CODES = tuple(range(400, 600))
@@ -35,21 +36,28 @@ def raise_if_streaming(stream: bool) -> None:
 @dataclass
 class MockResponseSettings:
     response_style: str = "varied"
+    tool_mode: str = "auto"
+    """``auto``: call an offered tool, then answer once its result comes back.
+    ``off``: ignore offered tools and always answer in text."""
 
     @classmethod
     def from_env(cls) -> "MockResponseSettings":
         return cls(
             response_style=os.getenv("LLMOCK_RESPONSE_STYLE", "varied"),
+            tool_mode=os.getenv("LLMOCK_TOOL_MODE", "auto"),
         ).validated()
 
     def validated(self) -> "MockResponseSettings":
         if self.response_style not in SUPPORTED_RESPONSE_STYLES:
             supported = ", ".join(sorted(SUPPORTED_RESPONSE_STYLES))
             raise ValueError(f"LLMOCK_RESPONSE_STYLE must be one of: {supported}.")
+        if self.tool_mode not in SUPPORTED_TOOL_MODES:
+            supported = ", ".join(sorted(SUPPORTED_TOOL_MODES))
+            raise ValueError(f"LLMOCK_TOOL_MODE must be one of: {supported}.")
         return self
 
     def as_env(self) -> dict[str, str]:
-        return {"LLMOCK_RESPONSE_STYLE": self.response_style}
+        return {"LLMOCK_RESPONSE_STYLE": self.response_style, "LLMOCK_TOOL_MODE": self.tool_mode}
 
 
 def flatten_text(value: Any) -> str:

@@ -20,7 +20,7 @@ from fastapi import APIRouter, Request, Response, status
 from pydantic import BaseModel, Field
 
 from llmock.routers import batch as batch_support
-from llmock.completion import Completion, plan_of, resolve
+from llmock.completion import Completion, resolve_request
 from llmock.simulation import MockResponseSettings, estimate_tokens, flatten_text
 from llmock.streaming import gemini_chunk_dicts, gemini_chunks, sse_response
 
@@ -119,16 +119,20 @@ def _completion(request: Request, model: str, body: GenerateContentRequest) -> C
         prompt_values.extend(p.model_dump(exclude_none=True) for p in content.parts)
     if body.systemInstruction:
         prompt_values.extend(p.model_dump(exclude_none=True) for p in body.systemInstruction.parts)
-    return resolve(
-        plan=plan_of(request),
-        settings=_response_settings(request),
+    return resolve_request(
+        request,
         model=model,
         prompt_text=" ".join(flatten_text(part) for part in prompt_values),
         prompt_tokens=estimate_tokens(*prompt_values),
     )
 
 
-@router.post("/models/{model}:generateContent", response_model=GenerateContentResponse)
+# Omit unset fields: a real part carries one payload, never a list of nulls.
+@router.post(
+    "/models/{model}:generateContent",
+    response_model=GenerateContentResponse,
+    response_model_exclude_none=True,
+)
 def generate_content(request: Request, model: str, body: GenerateContentRequest):
     completion = _completion(request, model, body)
     parts: list[Part] = []
