@@ -11,7 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 
-from llmock.simulation import _build_error_content, provider_from_path
+from llmock.simulation import _build_error_content, provider_from_path, retry_after_headers
 
 
 def _message_from_exc(exc: HTTPException) -> str:
@@ -42,8 +42,8 @@ async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONR
     _inject_message(content, message, provider)
 
     headers = dict(exc.headers or {})
-    if exc.status_code in {429, 503, 504, 529} and "retry-after" not in {k.lower() for k in headers}:
-        headers["retry-after"] = "1"
+    if "retry-after" not in {k.lower() for k in headers}:
+        headers.update(retry_after_headers(exc.status_code, None) or {})
 
     return JSONResponse(status_code=exc.status_code, content=content, headers=headers or None)
 

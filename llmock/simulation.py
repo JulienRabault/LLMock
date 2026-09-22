@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import math
 import html
 from http import HTTPStatus
 import os
@@ -197,11 +198,67 @@ def provider_from_path(path: str) -> str:
     return "openai"
 
 
-def build_error_response(path: str, status_code: int) -> JSONResponse:
+RETRYABLE_STATUS_CODES = frozenset({429, 503, 504, 529})
+DEFAULT_RETRY_AFTER_SECONDS = 1.0
+
+
+def build_error_response(
+    path: str,
+    status_code: int,
+    *,
+    retry_after: float | None = None,
+    message: str | None = None,
+    code: str | None = None,
+) -> JSONResponse:
+    """Build the provider-shaped error envelope for ``status_code``.
+
+    ``retry_after`` is sent as both ``retry-after`` (whole seconds, as HTTP
+    requires) and ``retry-after-ms``, which the OpenAI and Anthropic SDKs read
+    first -- so sub-second waits can be tested. Retryable statuses default to
+    one second when no value is given.
+    """
     provider = provider_from_path(path)
     content = _build_error_content(provider=provider, status_code=status_code)
-    headers = {"retry-after": "1"} if status_code in {429, 503, 504, 529} else None
-    return JSONResponse(status_code=status_code, content=content, headers=headers)
+    if message is not None or code is not None:
+        _override_error_fields(content, provider, message=message, code=code)
+    return JSONResponse(
+        status_code=status_code,
+        content=content,
+        headers=retry_after_headers(status_code, retry_after),
+    )
+
+
+def retry_after_headers(status_code: int, retry_after: float | None) -> dict[str, str] | None:
+    """``Retry-After`` headers for an error response, or None when not applicable."""
+    if retry_after is None:
+        if status_code not in RETRYABLE_STATUS_CODES:
+            return None
+        retry_after = DEFAULT_RETRY_AFTER_SECONDS
+    if retry_after < 0:
+        raise ValueError("retry_after must be >= 0")
+    return {
+        "retry-after": str(math.ceil(retry_after)),
+        "retry-after-ms": str(round(retry_after * 1000)),
+    }
+
+
+def _override_error_fields(
+    content: dict[str, Any], provider: str, *, message: str | None, code: str | None
+) -> None:
+    """Replace the generic message and code in an error envelope, in place."""
+    # Providers nest the error differently; find the dict that carries "message".
+    target = content["error"] if isinstance(content.get("error"), dict) else content
+    if message is not None:
+        target["message"] = message
+    if code is not None:
+        if provider == "anthropic":
+            target["type"] = code
+        elif provider == "gemini":
+            target["status"] = code
+        elif provider == "cohere":
+            target["type"] = code
+        else:
+            target["code"] = code
 
 
 def _build_error_content(provider: str, status_code: int) -> dict[str, Any]:

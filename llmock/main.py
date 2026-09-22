@@ -1,10 +1,15 @@
 """FastAPI application factory for LLMock."""
 
+from __future__ import annotations
+
 from fastapi import FastAPI
 
 from llmock import __version__
-from llmock.chaos import ChaosMiddleware, ChaosSettings, chaos_settings
+from llmock import admin
+from llmock.chaos import ChaosSettings, chaos_settings
 from llmock.errors import register_error_handlers
+from llmock.middleware import LLMockMiddleware, install_log_filter
+from llmock.state import LLMockState
 
 # Import every router module so their registry.register() calls fire at import time.
 import llmock.routers.ai21  # noqa: F401
@@ -35,13 +40,18 @@ def create_app(
         version=__version__,
     )
 
+    state = LLMockState(chaos=settings)
+    app.state.llmock = state
+    # Same object as state.chaos: mutating it changes behaviour live.
     app.state.chaos_settings = settings
     app.state.mock_response_settings = response_settings
     register_error_handlers(app)
-    app.add_middleware(ChaosMiddleware, settings=settings)
+    app.add_middleware(LLMockMiddleware, state=state)
+    install_log_filter()
 
     for router in get_all_routers():
         app.include_router(router)
+    app.include_router(admin.router)
 
     @app.get("/health")
     def health() -> dict:
