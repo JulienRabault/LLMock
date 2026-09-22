@@ -8,6 +8,7 @@ import html
 from http import HTTPStatus
 import os
 import random
+import zlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -103,8 +104,10 @@ def build_mock_text(
             ]
         )
 
-    # Use a cheap hash — we need determinism, not cryptographic strength.
-    idx = hash(f"{model}|{prompt}") % len(templates)
+    # CRC32 is cheap and, unlike the builtin hash(), identical in every process:
+    # hash() on str is salted per interpreter (PYTHONHASHSEED), which made this
+    # "deterministic" choice change between two CI runs.
+    idx = zlib.crc32(f"{model}|{prompt}".encode()) % len(templates)
     template = templates[idx]
     prompt_snippet = prompt[:80] if prompt else "your prompt"
     return template.format(model=model, prompt=prompt_snippet)
