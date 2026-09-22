@@ -1,5 +1,8 @@
 """Shared test fixtures."""
 
+# pytester runs throwaway test files through the llmock plugin, the way users do.
+pytest_plugins = ["pytester"]
+
 import os
 
 import pytest

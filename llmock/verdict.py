@@ -5,9 +5,11 @@ request failed, but how the client reacted: whether it waited as long as
 ``Retry-After`` asked, backed off, gave up on retryable errors, retried
 errors that can never succeed, or quietly accepted a truncated stream.
 
-Attempts are grouped into *calls*: a retry resends the same body, so it
-shares its predecessor's fingerprint. When the SDK sends
-``x-stainless-retry-count`` (OpenAI, Anthropic), that header decides.
+Attempts are grouped into *calls*: a retry resends the same body, so an
+attempt that repeats a failed one's fingerprint is its retry. SDK headers
+such as ``x-stainless-retry-count`` are deliberately not used for this: they
+only count retries made inside the SDK and read 0 on every attempt of an
+application-level retry loop -- the very loops worth judging.
 """
 
 from __future__ import annotations
@@ -155,7 +157,7 @@ def group_calls(records: Iterable[RequestRecord]) -> list[Call]:
     open_by_fingerprint: dict[str, list[RequestRecord]] = {}
     for record in sorted(records, key=lambda r: r.seq):
         group = open_by_fingerprint.get(record.fingerprint)
-        if group is not None and _is_retry(record, group[-1]):
+        if group is not None:
             group.append(record)
         else:
             group = [record]
@@ -166,12 +168,6 @@ def group_calls(records: Iterable[RequestRecord]) -> list[Call]:
         else:
             open_by_fingerprint.pop(record.fingerprint, None)
     return [Call(tuple(g)) for g in groups]
-
-
-def _is_retry(record: RequestRecord, previous: RequestRecord) -> bool:
-    if record.sdk_retry_count is not None:
-        return record.sdk_retry_count > 0
-    return _failed(previous)
 
 
 def _failed(record: RequestRecord) -> bool:

@@ -39,6 +39,10 @@ dependencies = [
 [project.scripts]
 llmock = "llmock.cli:app"
 
+# Makes the `llmock` fixture available in any project that installs llmock.
+[project.entry-points.pytest11]
+llmock = "llmock.pytest_plugin"
+
 [project.urls]
 Homepage = "https://github.com/JulienRabault/LLMock"
 Repository = "https://github.com/JulienRabault/LLMock"

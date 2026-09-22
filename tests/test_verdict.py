@@ -43,10 +43,13 @@ def test_different_bodies_are_different_calls():
     assert len(group_calls([attempt(0, status=503), attempt(1, fingerprint="call-b")])) == 2
 
 
-def test_the_sdk_retry_header_decides_when_present():
-    """x-stainless-retry-count: 0 means a fresh call, even after a failure."""
-    calls = group_calls([attempt(0, status=503, retry_count=0), attempt(1, retry_count=0)])
-    assert len(calls) == 2
+def test_application_level_retries_are_grouped_despite_the_sdk_header():
+    """An app loop calling create() again sends x-stainless-retry-count: 0 each time.
+
+    Those are still retries -- the ones most worth judging.
+    """
+    calls = group_calls([attempt(0, status=429, retry_count=0), attempt(1, retry_count=0)])
+    assert len(calls) == 1
 
 
 # -- rules --------------------------------------------------------------------
