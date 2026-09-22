@@ -170,6 +170,25 @@ class LLMock:
         self._server.app.state.mock_response_settings = replace(settings, tool_mode=mode).validated()
         return self
 
+    # -- quotas and pacing ----------------------------------------------
+
+    def limits(self, *, rpm: int | None = None, tpm: int | None = None,
+               context_window: int | None = None) -> LLMock:
+        """Enforce real quotas: 429s with the true wait, and rate-limit headers."""
+        from llmock.ratelimit import LimitSettings
+
+        self._server.state.limiter.configure(
+            LimitSettings(rpm=rpm, tpm=tpm, context_window=context_window))
+        return self
+
+    def pace(self, chunk_delay_ms: int) -> LLMock:
+        """Space streamed chunks out, like a model generating token by token."""
+        from dataclasses import replace
+
+        state = self._server.state
+        state.stream_chaos = replace(state.stream_chaos, chunk_delay_ms=chunk_delay_ms).validated()
+        return self
+
     def add(self, *behaviors: Behavior) -> LLMock:
         """Queue raw :mod:`llmock.scenarios` behaviours."""
         self._server.state.scenarios.add(*behaviors)
@@ -207,12 +226,16 @@ class LLMock:
 
     def reset(self) -> LLMock:
         """Forget requests and queued behaviours; restore default settings."""
+        from llmock.chaos import StreamChaos
+        from llmock.ratelimit import LimitSettings
         from llmock.simulation import MockResponseSettings
 
         state = self._server.state
         state.reset()
         state.chaos.error_rates = {}
         state.chaos.latency_ms = 0
+        state.limiter.configure(LimitSettings())
+        state.stream_chaos = StreamChaos()
         self._server.app.state.mock_response_settings = MockResponseSettings()
         return self
 

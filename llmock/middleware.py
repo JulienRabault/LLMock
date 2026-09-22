@@ -26,12 +26,14 @@ import logging
 import re
 import time
 from collections.abc import Awaitable, Callable, MutableMapping
+from dataclasses import replace
 from typing import Any
 
 from llmock.chaos import _sample_error_status
 from llmock.journal import RequestRecord, fingerprint
 from llmock.scenarios import Plan, RequestInfo, StreamFault
-from llmock.simulation import build_error_response, provider_from_path
+from llmock.ratelimit import ratelimit_headers, requested_tokens
+from llmock.simulation import build_error_response, estimate_tokens, provider_from_path
 from llmock.state import LLMockState
 
 __all__ = ["LLMockMiddleware", "StreamAborted", "install_log_filter"]
@@ -92,6 +94,10 @@ class LLMockMiddleware:
         # behaviours: they are meant for requests that actually get handled.
         error = _forced_error(headers)
         plan = Plan() if error is not None else self.state.scenarios.plan_for(info)
+        if info.stream and plan.stream_fault is None and error is None:
+            sampled = self.state.stream_chaos.sample()
+            if sampled is not None:
+                plan = replace(plan, stream_fault=sampled)
         request_state = scope.setdefault("state", {})
         request_state["llmock_plan"] = plan
         request_state["llmock_info"] = info
@@ -133,11 +139,19 @@ class LLMockMiddleware:
                 ticket,
             )
 
-        tracker = _Tracker(send, plan, on_final=journal_once)
+        tracker = _Tracker(
+            send, plan, on_final=journal_once,
+            chunk_delay=self.state.stream_chaos.chunk_delay_ms / 1000.0,
+        )
         try:
             if error is None:
                 await self._wait(plan)
-                error = _planned_error(plan) or _sampled_error(self.state)
+                error = (
+                    _planned_error(plan)
+                    or _sampled_error(self.state)
+                    or _context_error(self.state, info, body)
+                    or self._quota(info, headers, body, len(raw_body), tracker)
+                )
             if error is not None:
                 status, retry_after, message, code, label = error
                 tracker.fault = label
@@ -157,6 +171,25 @@ class LLMockMiddleware:
             journal_once()
             journal.end(ticket)
 
+    def _quota(self, info: RequestInfo, headers: dict[str, str], body: Any,
+               raw_size: int, tracker: _Tracker) -> _Error | None:
+        """Charge the request against RPM/TPM; refuse it when the quota is spent."""
+        limiter = self.state.limiter
+        if not limiter.settings.enabled:
+            return None
+        admission = limiter.admit(info.provider, _api_key(headers), requested_tokens(body, raw_size))
+        tracker.extra_headers = ratelimit_headers(info.provider, admission)
+        if admission.allowed:
+            return None
+        kind = admission.exhausted or "requests"
+        quota = admission.requests if kind == "requests" else admission.tokens
+        message = (
+            f"Rate limit reached for {kind} per minute: limit {quota.limit if quota else '?'}. "
+            f"Please try again in {admission.retry_after:.2f}s."
+        )
+        code = None if info.provider in ("anthropic", "gemini", "cohere") else "rate_limit_exceeded"
+        return (429, admission.retry_after, message, code, f"ratelimit:{kind}")
+
     async def _wait(self, plan: Plan) -> None:
         seconds = self.state.chaos.latency_ms / 1000.0
         if plan.delay is not None:
@@ -168,10 +201,13 @@ class LLMockMiddleware:
 class _Tracker:
     """Wraps ``send``: observes the response and applies stream faults."""
 
-    def __init__(self, send: Send, plan: Plan, on_final: Callable[[], None]) -> None:
+    def __init__(self, send: Send, plan: Plan, on_final: Callable[[], None],
+                 chunk_delay: float = 0.0) -> None:
         self._send = send
         self._plan = plan
         self._on_final = on_final
+        self._chunk_delay = chunk_delay
+        self.extra_headers: dict[str, str] = {}
         self._is_sse = False
         self._stalled = False
         self.status = 500
@@ -193,6 +229,11 @@ class _Tracker:
             self._is_sse = response_headers.get("content-type", "").startswith(
                 "text/event-stream"
             )
+            if self.extra_headers:
+                message = {**message, "headers": [
+                    *message.get("headers", []),
+                    *((k.encode("latin-1"), v.encode("latin-1")) for k, v in self.extra_headers.items()),
+                ]}
             await self._send(message)
             return
 
@@ -220,6 +261,8 @@ class _Tracker:
         slow = self._plan.slow_first_token
         if self.chunks == 0 and slow is not None and slow.seconds > 0:
             await asyncio.sleep(slow.seconds)
+        elif self.chunks > 0 and self._chunk_delay > 0:
+            await asyncio.sleep(self._chunk_delay)
 
     async def _apply_fault(self, fault: StreamFault, message: Message, body: bytes) -> Message:
         """Act on the chunk about to go out; return the message to send, if any."""
@@ -277,6 +320,34 @@ def _planned_error(plan: Plan) -> _Error | None:
     if fail is None:
         return None
     return (fail.status, fail.retry_after, fail.message, fail.code, f"scenario:{fail.status}")
+
+
+def _context_error(state: LLMockState, info: RequestInfo, body: Any) -> _Error | None:
+    """The provider's "prompt too long" error when the prompt exceeds the window."""
+    window = state.limiter.settings.context_window
+    if window is None or not isinstance(body, dict):
+        return None
+    used = estimate_tokens(*(body.get(k) for k in ("messages", "input", "contents", "system")
+                             if body.get(k) is not None))
+    if used <= window:
+        return None
+    if info.provider == "anthropic":
+        return (400, None, f"prompt is too long: {used} tokens > {window} maximum", None,
+                "context_window")
+    if info.provider == "gemini":
+        return (400, None, f"The input token count ({used}) exceeds the maximum number of "
+                f"tokens allowed ({window}).", None, "context_window")
+    return (400, None, f"This model's maximum context length is {window} tokens. However, "
+            f"your messages resulted in {used} tokens.", "context_length_exceeded",
+            "context_window")
+
+
+def _api_key(headers: dict[str, str]) -> str:
+    """The credential a request carries: limits are per key, like per organisation."""
+    for name in ("authorization", "x-api-key", "x-goog-api-key", "api-key"):
+        if headers.get(name):
+            return headers[name]
+    return ""
 
 
 def _sampled_error(state: LLMockState) -> _Error | None:

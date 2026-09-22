@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import os
 import random
 
@@ -193,3 +194,70 @@ def _sample_error_status(settings: ChaosSettings) -> int | None:
         if r < cumulative:
             return status
     return None
+
+
+# -- stream chaos, for CLI users who cannot script faults per request --------
+
+STREAM_FAULT_KINDS = ("disconnect", "truncate", "stall", "malformed")
+STREAM_FAULT_ENV_PREFIX = "LLMOCK_STREAM_FAULT_"
+
+
+@dataclass(frozen=True)
+class StreamChaos:
+    """Random stream faults and pacing, applied to every streamed response.
+
+    ``fault_rates`` maps a fault kind to its probability per stream. The
+    chunk a sampled fault hits is drawn between 1 and ``max_after_chunks``.
+    """
+
+    fault_rates: tuple[tuple[str, float], ...] = ()
+    stall_seconds: float = 10.0
+    chunk_delay_ms: int = 0
+    max_after_chunks: int = 6
+
+    @classmethod
+    def from_env(cls) -> StreamChaos:
+        rates = tuple(
+            (kind, float(os.environ[f"{STREAM_FAULT_ENV_PREFIX}{kind.upper()}"]))
+            for kind in STREAM_FAULT_KINDS
+            if os.environ.get(f"{STREAM_FAULT_ENV_PREFIX}{kind.upper()}")
+        )
+        return cls(
+            fault_rates=rates,
+            stall_seconds=float(os.getenv("LLMOCK_STREAM_STALL_SECONDS", "10")),
+            chunk_delay_ms=int(os.getenv("LLMOCK_STREAM_CHUNK_DELAY_MS", "0")),
+        ).validated()
+
+    def validated(self) -> StreamChaos:
+        total = 0.0
+        for kind, rate in self.fault_rates:
+            if kind not in STREAM_FAULT_KINDS:
+                raise ValueError(f"Unknown stream fault {kind!r}; expected one of {STREAM_FAULT_KINDS}")
+            if not 0.0 <= rate <= 1.0:
+                raise ValueError(f"Stream fault rate for {kind} must be between 0.0 and 1.0")
+            total += rate
+        if total > 1.0:
+            raise ValueError("The sum of stream fault probabilities must be <= 1.0")
+        if self.stall_seconds < 0 or self.chunk_delay_ms < 0:
+            raise ValueError("Stream stall and chunk delay must be >= 0")
+        return self
+
+    def as_env(self) -> dict[str, str]:
+        env = {f"{STREAM_FAULT_ENV_PREFIX}{kind.upper()}": str(rate) for kind, rate in self.fault_rates}
+        env["LLMOCK_STREAM_STALL_SECONDS"] = str(self.stall_seconds)
+        env["LLMOCK_STREAM_CHUNK_DELAY_MS"] = str(self.chunk_delay_ms)
+        return env
+
+    def sample(self, rng: random.Random | None = None):
+        """A :class:`~llmock.scenarios.StreamFault` for this stream, or None."""
+        from llmock.scenarios import Match, StreamFault
+
+        draw = (rng or random).random()
+        cumulative = 0.0
+        for kind, rate in self.fault_rates:
+            cumulative += rate
+            if draw < cumulative:
+                after = (rng or random).randint(1, self.max_after_chunks)
+                return StreamFault(kind, after_chunks=after, stall_seconds=self.stall_seconds,  # type: ignore[arg-type]
+                                   match=Match(stream=True))
+        return None

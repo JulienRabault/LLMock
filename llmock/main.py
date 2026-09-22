@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI
 
 from llmock import __version__
 from llmock import admin
-from llmock.chaos import ChaosSettings, chaos_settings
+from llmock.chaos import ChaosSettings, StreamChaos, chaos_settings
 from llmock.errors import register_error_handlers
 from llmock.middleware import LLMockMiddleware, install_log_filter
+from llmock.ratelimit import LimitSettings
 from llmock.state import LLMockState
 
 # Import every router module so their registry.register() calls fire at import time.
@@ -31,9 +34,13 @@ from llmock.simulation import MockResponseSettings
 def create_app(
     chaos: ChaosSettings | None = None,
     responses: MockResponseSettings | None = None,
+    limits: LimitSettings | None = None,
+    stream_chaos: StreamChaos | None = None,
 ) -> FastAPI:
     settings = (chaos or ChaosSettings.from_env()).validated()
     response_settings = (responses or MockResponseSettings.from_env()).validated()
+    limit_settings = (limits or LimitSettings.from_env()).validated()
+    stream_settings = (stream_chaos or StreamChaos.from_env()).validated()
 
     app = FastAPI(
         title="LLMock",
@@ -41,7 +48,7 @@ def create_app(
         version=__version__,
     )
 
-    state = LLMockState(chaos=settings)
+    state = LLMockState(chaos=settings, limits=limit_settings, stream_chaos=stream_settings)
     app.state.llmock = state
     # Same object as state.chaos: mutating it changes behaviour live.
     app.state.chaos_settings = settings
@@ -54,6 +61,9 @@ def create_app(
         app.include_router(router)
     app.include_router(admin.router)
 
+    if os.getenv("LLMOCK_REPORT") == "1":
+        app.router.add_event_handler("shutdown", lambda: _print_verdict(state))
+
     @app.get("/health")
     def health() -> dict:
         return {"status": "ok", "version": __version__}
@@ -62,3 +72,9 @@ def create_app(
 
 
 app = create_app(chaos=chaos_settings)
+
+
+def _print_verdict(state: LLMockState) -> None:
+    from llmock.verdict import judge
+
+    print("\n" + judge(state.journal.records()).render(), flush=True)

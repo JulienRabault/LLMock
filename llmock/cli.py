@@ -10,7 +10,8 @@ import typer
 import uvicorn
 import yaml
 
-from llmock.chaos import ChaosSettings
+from llmock.chaos import STREAM_FAULT_ENV_PREFIX, STREAM_FAULT_KINDS, ChaosSettings, StreamChaos
+from llmock.ratelimit import LimitSettings
 from llmock.simulation import ERROR_RATE_ENV_PREFIX, MockResponseSettings, SUPPORTED_ERROR_STATUS_CODES
 
 app = typer.Typer(
@@ -122,15 +123,30 @@ def _parse_error_rate_options(values: list[str] | None) -> dict[int, float]:
     return parsed
 
 
-def _set_server_env(*, chaos: ChaosSettings, responses: MockResponseSettings) -> None:
+def _set_server_env(
+    *,
+    chaos: ChaosSettings,
+    responses: MockResponseSettings,
+    limits: LimitSettings | None = None,
+    stream: StreamChaos | None = None,
+    report: bool = False,
+) -> None:
+    """Hand settings to the app through the environment.
+
+    Uvicorn builds the app itself (factory mode, possibly in a reloader
+    subprocess), so the environment is the one channel that always reaches it.
+    """
     for key in list(os.environ):
-        if key.startswith(ERROR_RATE_ENV_PREFIX):
+        if key.startswith((ERROR_RATE_ENV_PREFIX, STREAM_FAULT_ENV_PREFIX)) or key in (
+            "LLMOCK_RPM", "LLMOCK_TPM", "LLMOCK_CONTEXT_WINDOW", "LLMOCK_REPORT",
+        ):
             del os.environ[key]
 
-    for key, value in chaos.as_env().items():
-        os.environ[key] = value
-    for key, value in responses.as_env().items():
-        os.environ[key] = value
+    for settings in (chaos, responses, limits, stream):
+        if settings is not None:
+            os.environ.update(settings.as_env())
+    if report:
+        os.environ["LLMOCK_REPORT"] = "1"
 
 
 def _resolve_chaos_settings(
@@ -161,7 +177,9 @@ def _resolve_chaos_settings(
     )
 
 
-def _resolve_mock_response_settings(*, config: dict[str, Any], response_style: str | None) -> MockResponseSettings:
+def _resolve_mock_response_settings(
+    *, config: dict[str, Any], response_style: str | None, tool_mode: str | None = None
+) -> MockResponseSettings:
     settings = MockResponseSettings(
         response_style=str(
             _config_scalar(config, "response_style")
@@ -175,7 +193,73 @@ def _resolve_mock_response_settings(*, config: dict[str, Any], response_style: s
         settings.response_style = env_style
     if response_style is not None:
         settings.response_style = response_style
+    configured = _config_scalar(config, "tool_mode", section="responses")
+    if isinstance(configured, bool):
+        # YAML 1.1 reads a bare `off` as False and `on` as True.
+        configured = "auto" if configured else "off"
+    settings.tool_mode = str(tool_mode or os.getenv("LLMOCK_TOOL_MODE") or configured or "auto")
     return settings.validated()
+
+
+def _resolve_limits(
+    *, config: dict[str, Any], rpm: int | None, tpm: int | None, context_window: int | None
+) -> LimitSettings:
+    env = LimitSettings.from_env()
+
+    def pick(flag: int | None, env_value: int | None, key: str) -> int | None:
+        if flag is not None:
+            return flag
+        if env_value is not None:
+            return env_value
+        value = _config_scalar(config, key, section="limits")
+        return int(value) if value is not None else None
+
+    return LimitSettings(
+        rpm=pick(rpm, env.rpm, "rpm"),
+        tpm=pick(tpm, env.tpm, "tpm"),
+        context_window=pick(context_window, env.context_window, "context_window"),
+    ).validated()
+
+
+def _parse_stream_faults(values: list[str] | None) -> dict[str, float]:
+    parsed: dict[str, float] = {}
+    for value in values or []:
+        kind, sep, rate = value.partition("=")
+        if not sep or kind not in STREAM_FAULT_KINDS:
+            raise typer.BadParameter(
+                "Each --stream-fault must be KIND=PROBABILITY with KIND in "
+                + ", ".join(STREAM_FAULT_KINDS) + ", e.g. truncate=0.1."
+            )
+        try:
+            parsed[kind] = float(rate)
+        except ValueError as exc:
+            raise typer.BadParameter(f"Invalid probability in --stream-fault {value!r}") from exc
+    return parsed
+
+
+def _resolve_stream_chaos(
+    *,
+    config: dict[str, Any],
+    stream_faults: list[str] | None,
+    stall_seconds: float | None,
+    chunk_delay_ms: int | None,
+) -> StreamChaos:
+    section = config.get("stream") if isinstance(config.get("stream"), dict) else {}
+    rates = {str(k): float(v) for k, v in (section.get("faults") or {}).items()}
+    env = StreamChaos.from_env()
+    rates.update(dict(env.fault_rates))
+    rates.update(_parse_stream_faults(stream_faults))
+    env_stall = os.getenv("LLMOCK_STREAM_STALL_SECONDS")
+    env_delay = os.getenv("LLMOCK_STREAM_CHUNK_DELAY_MS")
+    if stall_seconds is None:
+        stall_seconds = float(env_stall) if env_stall is not None else float(section.get("stall_seconds", 10.0))
+    if chunk_delay_ms is None:
+        chunk_delay_ms = int(env_delay) if env_delay is not None else int(section.get("chunk_delay_ms", 0))
+    return StreamChaos(
+        fault_rates=tuple(sorted(rates.items())),
+        stall_seconds=stall_seconds,
+        chunk_delay_ms=chunk_delay_ms,
+    ).validated()
 
 
 def _resolve_server_host(*, config: dict[str, Any], host: str | None) -> str:
@@ -236,6 +320,36 @@ def serve(
         "--response-style",
         help="Override LLMOCK_RESPONSE_STYLE (static, hello, echo, varied).",
     ),
+    tool_mode: str | None = typer.Option(
+        None,
+        "--tool-mode",
+        help="auto: call offered tools, then answer once a tool result comes back. "
+        "off: always answer in text. Default auto.",
+    ),
+    rpm: int | None = typer.Option(
+        None, "--rpm", help="Requests per minute per API key; beyond it, 429 with the real wait."
+    ),
+    tpm: int | None = typer.Option(
+        None, "--tpm", help="Tokens per minute per API key (prompt estimate + max tokens)."
+    ),
+    context_window: int | None = typer.Option(
+        None, "--context-window", help="Reject prompts estimated above this many tokens, like a real model."
+    ),
+    stream_faults: list[str] | None = typer.Option(
+        None,
+        "--stream-fault",
+        help="Break streams at random: KIND=PROBABILITY with KIND in disconnect, truncate, "
+        "stall, malformed. Repeatable, e.g. --stream-fault truncate=0.1.",
+    ),
+    stream_stall_seconds: float | None = typer.Option(
+        None, "--stream-stall-seconds", help="How long a random stall lasts (default 10)."
+    ),
+    stream_chunk_delay_ms: int | None = typer.Option(
+        None, "--stream-chunk-delay-ms", help="Pause between streamed chunks, to look like real generation."
+    ),
+    report: bool = typer.Option(
+        False, "--report", help="On shutdown, print the resilience verdict of every client that connected."
+    ),
 ) -> None:
     """Start the LLMock server."""
     config_path = _resolve_config_path(config=config)
@@ -250,8 +364,17 @@ def serve(
         error_rate_500=error_rate_500,
         error_rate_503=error_rate_503,
     )
-    responses = _resolve_mock_response_settings(config=loaded_config, response_style=response_style)
-    _set_server_env(chaos=chaos, responses=responses)
+    responses = _resolve_mock_response_settings(
+        config=loaded_config, response_style=response_style, tool_mode=tool_mode
+    )
+    limits = _resolve_limits(config=loaded_config, rpm=rpm, tpm=tpm, context_window=context_window)
+    stream = _resolve_stream_chaos(
+        config=loaded_config,
+        stream_faults=stream_faults,
+        stall_seconds=stream_stall_seconds,
+        chunk_delay_ms=stream_chunk_delay_ms,
+    )
+    _set_server_env(chaos=chaos, responses=responses, limits=limits, stream=stream, report=report)
 
     configured_rates = _format_error_rates(chaos)
     if chaos.latency_ms or configured_rates:
@@ -259,7 +382,15 @@ def serve(
 
     if config_path:
         typer.echo(f"Config: {config_path}")
-    typer.echo(f"Responses: style={responses.response_style}")
+    typer.echo(f"Responses: style={responses.response_style}  tools={responses.tool_mode}")
+    if limits.enabled or limits.context_window:
+        typer.echo(
+            f"Limits: rpm={limits.rpm or '-'}  tpm={limits.tpm or '-'}  "
+            f"context_window={limits.context_window or '-'}"
+        )
+    if stream.fault_rates or stream.chunk_delay_ms:
+        faults = ", ".join(f"{k}={v:.0%}" for k, v in stream.fault_rates) or "none"
+        typer.echo(f"Streams: faults=[{faults}]  chunk_delay={stream.chunk_delay_ms}ms")
     typer.echo(f"Starting LLMock on http://{resolved_host}:{resolved_port}")
     uvicorn.run(
         "llmock.main:create_app",
@@ -269,6 +400,30 @@ def serve(
         reload=reload,
         log_level=log_level,
     )
+
+
+@app.command()
+def report(
+    url: str = typer.Option("http://127.0.0.1:8000", "--url", help="The running LLMock server."),
+    strict: bool = typer.Option(False, "--strict", help="Fail on warnings as well as errors."),
+    as_json: bool = typer.Option(False, "--json", help="Print the verdict as JSON."),
+) -> None:
+    """Print the resilience verdict of a running server; exit 1 if a client misbehaved.
+
+    Meant for CI: run your suite against `llmock serve`, then `llmock report`.
+    """
+    import httpx
+
+    base = url.rstrip("/")
+    try:
+        data = httpx.get(f"{base}/_llmock/verdict", timeout=10).json()
+        text = httpx.get(f"{base}/_llmock/verdict", params={"format": "text"}, timeout=10).text
+    except httpx.HTTPError as exc:
+        typer.echo(f"Could not reach LLMock at {base}: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    typer.echo(json.dumps(data, indent=2) if as_json else text)
+    if not data["passed"] or (strict and data["warnings"]):
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
