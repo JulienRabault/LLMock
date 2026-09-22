@@ -25,12 +25,20 @@ jobs:
         run: python -m ruff check llmock tests
 
   tests:
-    name: Tests
-    runs-on: ubuntu-latest
+    name: Tests (py${{ matrix.python-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        os: [ubuntu-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        # Streaming and timing behaviour is OS-sensitive, so cover the
+        # platforms people actually run a local mock server on.
+        include:
+          - os: windows-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.12"
 
     steps:
       - name: Check out repository
