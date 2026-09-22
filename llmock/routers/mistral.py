@@ -22,15 +22,20 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from llmock.routers import batch as batch_support
-from llmock.simulation import MockResponseSettings, build_mock_text, estimate_tokens, flatten_text, raise_if_streaming
+from llmock.routers._chat import complete, is_streaming, openai_stream, openai_tool_calls, prompt_of
+from llmock.simulation import MockResponseSettings
 
 router = APIRouter(prefix="/mistral/v1", tags=["mistral"])
 
 
 class InputChatMessage(BaseModel):
     role: str
-    content: str | list[Any]
+    # None is legitimate for an assistant message that only calls tools, and
+    # agent loops send tool results back as role="tool" with a tool_call_id.
+    content: str | list[Any] | None = None
     name: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
 
 
 class ChatCompletionRequest(BaseModel):
@@ -46,7 +51,8 @@ class ChatCompletionRequest(BaseModel):
 
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
 
 
 class ChatCompletionChoice(BaseModel):
@@ -122,20 +128,25 @@ def list_models() -> ModelList:
 
 @router.post("/chat/completions", response_model=ChatCompletionResponse)
 def chat_completions(request: Request, body: ChatCompletionRequest) -> ChatCompletionResponse:
-    raise_if_streaming(body.stream)
-    prompt_text = " ".join(flatten_text(message.content) for message in body.messages)
-    prompt_tokens = estimate_tokens(*(message.content for message in body.messages))
-    reply_text = build_mock_text(
-        settings=_response_settings(request),
-        model=body.model,
-        prompt=prompt_text,
+    prompt_text, prompt_tokens = prompt_of(body.messages)
+    completion = complete(
+        request, model=body.model, prompt_text=prompt_text, prompt_tokens=prompt_tokens
     )
-    completion_tokens = estimate_tokens(reply_text)
+    if is_streaming(request):
+        return openai_stream(request, completion, model=body.model, choices=body.n, id_prefix="cmpl")
+    reply_text = completion.text
+    completion_tokens = completion.completion_tokens
+    prompt_tokens = completion.prompt_tokens
 
     choices = [
         ChatCompletionChoice(
             index=index,
-            message=ChatMessage(role="assistant", content=reply_text),
+            message=ChatMessage(
+                role="assistant",
+                content=reply_text if reply_text or not completion.tool_calls else None,
+                tool_calls=openai_tool_calls(completion),
+            ),
+            finish_reason=completion.finish_reason,
         )
         for index in range(body.n)
     ]

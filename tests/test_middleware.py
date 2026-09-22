@@ -99,7 +99,8 @@ def test_delay_holds_the_response(app, client):
     app.state.llmock.scenarios.add(Delay(0.3))
     start = time.monotonic()
     client.post("/v1/chat/completions", json=CHAT)
-    assert time.monotonic() - start >= 0.3
+    # Windows timers tick every ~15.6 ms; allow a hair of slack.
+    assert time.monotonic() - start >= 0.3 - 0.05
 
 
 def test_forced_header_still_wins(app, client):

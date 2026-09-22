@@ -1,4 +1,4 @@
-"""Tests for provider-specific error formats and streaming 501 stubs."""
+"""Tests for provider-specific error formats."""
 
 from __future__ import annotations
 
@@ -75,22 +75,6 @@ def test_anthropic_422_validation_error(client):
     assert body["error"]["type"] == "invalid_request_error"
 
 
-def test_anthropic_stream_returns_501(client):
-    resp = client.post(
-        "/anthropic/v1/messages",
-        json={
-            "model": "claude-sonnet-4-6",
-            "max_tokens": 128,
-            "messages": [{"role": "user", "content": "hi"}],
-            "stream": True,
-        },
-        headers={"x-api-key": "test", "anthropic-version": "2023-06-01"},
-    )
-    assert resp.status_code == 501
-    body = resp.json()
-    assert body.get("type") == "error"
-
-
 # ---------------------------------------------------------------------------
 # Gemini error format (/gemini/v1beta/*)
 # ---------------------------------------------------------------------------
@@ -131,17 +115,6 @@ def test_mistral_404_error_format(client):
     assert "code" in body
 
 
-def test_mistral_stream_returns_501(client):
-    resp = client.post(
-        "/mistral/v1/chat/completions",
-        json={"model": "mistral-large-latest", "messages": [{"role": "user", "content": "hi"}], "stream": True},
-    )
-    assert resp.status_code == 501
-    body = resp.json()
-    assert body.get("object") == "error"
-    assert "stream" in body["message"].lower()
-
-
 # ---------------------------------------------------------------------------
 # Cohere error format (/cohere/v2/*)
 # ---------------------------------------------------------------------------
@@ -169,26 +142,6 @@ def test_cohere_404_error_format(client):
 # ---------------------------------------------------------------------------
 # Groq and Together (OpenAI-compatible) streaming
 # ---------------------------------------------------------------------------
-
-def test_groq_stream_returns_501(client):
-    resp = client.post(
-        "/groq/openai/v1/chat/completions",
-        json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": "hi"}], "stream": True},
-    )
-    assert resp.status_code == 501
-    body = resp.json()
-    assert "error" in body
-
-
-def test_together_stream_returns_501(client):
-    resp = client.post(
-        "/together/v1/chat/completions",
-        json={"model": "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", "messages": [{"role": "user", "content": "hi"}], "stream": True},
-    )
-    assert resp.status_code == 501
-    body = resp.json()
-    assert "error" in body
-
 
 # ---------------------------------------------------------------------------
 # Error message content — not just shape

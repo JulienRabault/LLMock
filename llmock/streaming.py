@@ -4,12 +4,13 @@ Each encoder yields one complete SSE event per item. The middleware relies
 on that: one ASGI body message is one event, which is what lets it cut,
 stall or corrupt a stream at a precise point for every provider alike.
 
-Three formats cover all ten providers:
+Four formats cover all ten providers:
 
 - OpenAI ``chat.completion.chunk`` -- OpenAI, Groq, Together, Perplexity,
   xAI, Mistral and AI21 all speak it;
 - Anthropic's typed events (``message_start`` ... ``message_stop``);
-- Gemini's ``streamGenerateContent?alt=sse`` candidates.
+- Gemini's ``streamGenerateContent?alt=sse`` candidates;
+- Cohere v2's typed events (``message-start`` ... ``message-end``).
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ from llmock.completion import Completion
 
 __all__ = [
     "anthropic_events",
+    "cohere_events",
+    "gemini_chunk_dicts",
     "gemini_chunks",
     "openai_chat_chunks",
     "sse",
@@ -189,8 +192,10 @@ _GEMINI_FINISH = {"stop": "STOP", "length": "MAX_TOKENS", "tool_calls": "STOP",
                   "content_filter": "SAFETY"}
 
 
-def gemini_chunks(completion: Completion, *, model: str) -> Iterator[bytes]:
-    def chunk(parts: list[dict[str, Any]], finish: str | None = None) -> bytes:
+def gemini_chunk_dicts(completion: Completion, *, model: str) -> list[dict[str, Any]]:
+    """The streamed GenerateContentResponse objects, in order."""
+
+    def chunk(parts: list[dict[str, Any]], finish: str | None = None) -> dict[str, Any]:
         candidate: dict[str, Any] = {"content": {"parts": parts, "role": "model"}, "index": 0}
         data: dict[str, Any] = {"candidates": [candidate], "modelVersion": model}
         if finish is not None:
@@ -200,7 +205,7 @@ def gemini_chunks(completion: Completion, *, model: str) -> Iterator[bytes]:
                 "candidatesTokenCount": completion.completion_tokens,
                 "totalTokenCount": completion.total_tokens,
             }
-        return sse(data)
+        return data
 
     pieces = text_pieces(completion.text)
     finish = _GEMINI_FINISH.get(completion.finish_reason, "STOP")
@@ -208,7 +213,58 @@ def gemini_chunks(completion: Completion, *, model: str) -> Iterator[bytes]:
     calls = [{"functionCall": {"name": c.name, "args": c.parsed_arguments}}
              for c in completion.tool_calls]
 
-    for piece in pieces[:-1]:
-        yield chunk([{"text": piece}])
+    chunks = [chunk([{"text": piece}]) for piece in pieces[:-1]]
     last_parts = ([{"text": pieces[-1]}] if pieces else []) + calls
-    yield chunk(last_parts or [{"text": ""}], finish)
+    chunks.append(chunk(last_parts or [{"text": ""}], finish))
+    return chunks
+
+
+def gemini_chunks(completion: Completion, *, model: str) -> Iterator[bytes]:
+    for data in gemini_chunk_dicts(completion, model=model):
+        yield sse(data)
+
+
+# -- Cohere v2 chat -----------------------------------------------------------
+# Shapes follow the cohere SDK's own V2ChatStreamResponse union.
+
+COHERE_FINISH = {"stop": "COMPLETE", "length": "MAX_TOKENS", "tool_calls": "TOOL_CALL",
+                 "content_filter": "ERROR"}
+
+
+def cohere_usage(completion: Completion) -> dict[str, Any]:
+    units = {"input_tokens": completion.prompt_tokens, "output_tokens": completion.completion_tokens}
+    return {"billed_units": dict(units), "tokens": dict(units)}
+
+
+def cohere_events(completion: Completion, *, message_id: str) -> Iterator[bytes]:
+    def event(data: dict[str, Any]) -> bytes:
+        return sse(data, event=data["type"])
+
+    yield event({"type": "message-start", "id": message_id, "delta": {"message": {
+        "role": "assistant", "content": [], "tool_plan": "", "tool_calls": [], "citations": [],
+    }}})
+
+    index = 0
+    if completion.text or not completion.tool_calls:
+        yield event({"type": "content-start", "index": index,
+                     "delta": {"message": {"content": {"type": "text", "text": ""}}}})
+        for piece in text_pieces(completion.text):
+            yield event({"type": "content-delta", "index": index,
+                         "delta": {"message": {"content": {"text": piece}}}})
+        yield event({"type": "content-end", "index": index})
+
+    for position, call in enumerate(completion.tool_calls):
+        yield event({"type": "tool-call-start", "index": position, "delta": {"message": {
+            "tool_calls": {"id": call.id, "type": "function",
+                           "function": {"name": call.name, "arguments": ""}},
+        }}})
+        for fragment in _fragments(call.arguments):
+            yield event({"type": "tool-call-delta", "index": position, "delta": {"message": {
+                "tool_calls": {"function": {"arguments": fragment}},
+            }}})
+        yield event({"type": "tool-call-end", "index": position})
+
+    yield event({"type": "message-end", "id": message_id, "delta": {
+        "finish_reason": COHERE_FINISH.get(completion.finish_reason, "COMPLETE"),
+        "usage": cohere_usage(completion),
+    }})

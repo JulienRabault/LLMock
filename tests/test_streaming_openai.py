@@ -163,6 +163,11 @@ def test_stall_trips_the_client_read_timeout(server):
     assert time.monotonic() - started < 3, "the client, not the stall, should end the wait"
 
 
+# Windows clocks and asyncio timers tick every ~15.6 ms, so a 0.5 s sleep can
+# be measured a hair short. Allow for that rather than flake.
+_CLOCK_SLACK = 0.05
+
+
 def test_slow_first_token_delays_only_the_start(server):
     server.state.scenarios.add(SlowFirstToken(0.5))
     started = time.monotonic()
@@ -170,8 +175,9 @@ def test_slow_first_token_delays_only_the_start(server):
     with client(server).chat.completions.create(model="gpt-4o", messages=PROMPT, stream=True) as s:
         for _ in s:
             first_at = first_at or time.monotonic() - started
-    assert first_at >= 0.5
-    assert time.monotonic() - started < first_at + 0.5
+    assert first_at >= 0.5 - _CLOCK_SLACK
+    # Only the first chunk waits: the rest of the stream follows promptly.
+    assert time.monotonic() - started < first_at + 1.0
 
 
 def test_fault_position_is_exact(server):

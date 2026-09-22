@@ -24,7 +24,10 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from llmock.routers import batch as batch_support
-from llmock.simulation import MockResponseSettings, build_mock_text, estimate_tokens, flatten_text, raise_if_streaming
+from llmock.completion import plan_of, resolve
+from llmock.routers._chat import is_streaming
+from llmock.simulation import MockResponseSettings, estimate_tokens, flatten_text
+from llmock.streaming import anthropic_events, sse_response
 
 router = APIRouter(prefix="/anthropic", tags=["anthropic"])
 
@@ -38,7 +41,8 @@ class MessagesRequest(BaseModel):
     model: str
     messages: list[MessageParam]
     max_tokens: int
-    system: str | None = None
+    # A plain string, or a list of content blocks (e.g. with cache_control).
+    system: str | list[Any] | None = None
     temperature: float | None = 1.0
     top_p: float | None = None
     top_k: int | None = None
@@ -51,6 +55,13 @@ class TextBlock(BaseModel):
     text: str
 
 
+class ToolUseBlock(BaseModel):
+    type: Literal["tool_use"] = "tool_use"
+    id: str
+    name: str
+    input: dict[str, Any]
+
+
 class InputTokensUsage(BaseModel):
     input_tokens: int
     output_tokens: int
@@ -60,9 +71,9 @@ class MessagesResponse(BaseModel):
     id: str = Field(default_factory=lambda: f"msg_{uuid.uuid4().hex[:24]}")
     type: Literal["message"] = "message"
     role: Literal["assistant"] = "assistant"
-    content: list[TextBlock]
+    content: list[TextBlock | ToolUseBlock]
     model: str
-    stop_reason: Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"] = "end_turn"
+    stop_reason: str = "end_turn"
     stop_sequence: str | None = None
     usage: InputTokensUsage
 
@@ -104,29 +115,45 @@ def list_models() -> ModelList:
     )
 
 
+_STOP_REASONS = {"stop": "end_turn", "length": "max_tokens", "tool_calls": "tool_use",
+                 "content_filter": "refusal"}
+
+
 @router.post("/v1/messages", response_model=MessagesResponse)
-def create_message(request: Request, body: MessagesRequest) -> MessagesResponse:
-    raise_if_streaming(body.stream)
+def create_message(request: Request, body: MessagesRequest):
     prompt_text = " ".join(flatten_text(message.content) for message in body.messages)
     input_tokens = estimate_tokens(*(message.content for message in body.messages), body.system or "")
-    reply_text = build_mock_text(
+    completion = resolve(
+        plan=plan_of(request),
         settings=_response_settings(request),
         model=body.model,
-        prompt=prompt_text,
+        prompt_text=prompt_text,
+        prompt_tokens=input_tokens,
+        tool_call_prefix="toolu",
     )
-    output_tokens = estimate_tokens(reply_text)
+    message_id = f"msg_{uuid.uuid4().hex[:24]}"
+    if is_streaming(request):
+        return sse_response(anthropic_events(completion, message_id=message_id, model=body.model))
 
-    stop_reason: Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"] = "end_turn"
-    if output_tokens >= body.max_tokens:
+    stop_reason = _STOP_REASONS.get(completion.finish_reason, completion.finish_reason)
+    if stop_reason == "end_turn" and completion.completion_tokens >= body.max_tokens:
         stop_reason = "max_tokens"
 
+    content: list[TextBlock | ToolUseBlock] = []
+    if completion.text or not completion.tool_calls:
+        content.append(TextBlock(text=completion.text))
+    content.extend(
+        ToolUseBlock(id=call.id, name=call.name, input=call.parsed_arguments)
+        for call in completion.tool_calls
+    )
     return MessagesResponse(
+        id=message_id,
         model=body.model,
-        content=[TextBlock(text=reply_text)],
+        content=content,
         stop_reason=stop_reason,
         usage=InputTokensUsage(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
+            input_tokens=completion.prompt_tokens,
+            output_tokens=completion.completion_tokens,
         ),
     )
 

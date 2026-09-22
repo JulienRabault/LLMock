@@ -19,7 +19,14 @@ from llmock.completion import Completion, plan_of, resolve
 from llmock.simulation import MockResponseSettings, estimate_tokens, flatten_text
 from llmock.streaming import openai_chat_chunks, sse_response
 
-__all__ = ["complete", "is_streaming", "openai_stream", "prompt_of", "raw_body"]
+__all__ = [
+    "complete",
+    "is_streaming",
+    "openai_stream",
+    "openai_tool_calls",
+    "prompt_of",
+    "raw_body",
+]
 
 
 def raw_body(request: Request) -> dict[str, Any]:
@@ -75,3 +82,13 @@ def openai_stream(
             choices=max(1, choices),
         )
     )
+
+
+def openai_tool_calls(completion: Completion) -> list[dict[str, Any]] | None:
+    """Tool calls in the OpenAI JSON shape, or None when there are none."""
+    if not completion.tool_calls:
+        return None
+    return [
+        {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments}}
+        for c in completion.tool_calls
+    ]

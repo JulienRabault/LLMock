@@ -20,23 +20,33 @@ from fastapi import APIRouter, Request, Response, status
 from pydantic import BaseModel, Field
 
 from llmock.routers import batch as batch_support
-from llmock.simulation import MockResponseSettings, build_mock_text, estimate_tokens, flatten_text
+from llmock.completion import Completion, plan_of, resolve
+from llmock.simulation import MockResponseSettings, estimate_tokens, flatten_text
+from llmock.streaming import gemini_chunk_dicts, gemini_chunks, sse_response
 
 router = APIRouter(prefix="/gemini/v1beta", tags=["gemini"])
 
 
 class Part(BaseModel):
-    text: str
+    # A part carries exactly one kind of payload. Agent loops send back the
+    # model's functionCall and their own functionResponse, so text is optional.
+    text: str | None = None
+    functionCall: dict[str, Any] | None = None
+    functionResponse: dict[str, Any] | None = None
+    inlineData: dict[str, Any] | None = None
+    fileData: dict[str, Any] | None = None
 
 
 class Content(BaseModel):
-    role: str
+    role: str | None = None
     parts: list[Part]
 
 
 class GenerateContentRequest(BaseModel):
     contents: list[Content]
     systemInstruction: Content | None = None
+    tools: list[dict[str, Any]] | None = None
+    generationConfig: dict[str, Any] | None = None
 
 
 class Candidate(BaseModel):
@@ -100,40 +110,57 @@ def list_models() -> ModelList:
     return ModelList(models=models)
 
 
-@router.post("/models/{model}:generateContent", response_model=GenerateContentResponse)
-def generate_content(
-    request: Request,
-    model: str,
-    body: GenerateContentRequest,
-) -> GenerateContentResponse:
+_FINISH = {"stop": "STOP", "length": "MAX_TOKENS", "tool_calls": "STOP", "content_filter": "SAFETY"}
+
+
+def _completion(request: Request, model: str, body: GenerateContentRequest) -> Completion:
     prompt_values: list[Any] = []
     for content in body.contents:
-        prompt_values.extend(content.parts)
+        prompt_values.extend(p.model_dump(exclude_none=True) for p in content.parts)
     if body.systemInstruction:
-        prompt_values.extend(body.systemInstruction.parts)
-
-    prompt_text = " ".join(flatten_text(part) for part in prompt_values)
-    prompt_tokens = estimate_tokens(*prompt_values)
-    reply_text = build_mock_text(
+        prompt_values.extend(p.model_dump(exclude_none=True) for p in body.systemInstruction.parts)
+    return resolve(
+        plan=plan_of(request),
         settings=_response_settings(request),
         model=model,
-        prompt=prompt_text,
+        prompt_text=" ".join(flatten_text(part) for part in prompt_values),
+        prompt_tokens=estimate_tokens(*prompt_values),
     )
-    output_tokens = estimate_tokens(reply_text)
 
+
+@router.post("/models/{model}:generateContent", response_model=GenerateContentResponse)
+def generate_content(request: Request, model: str, body: GenerateContentRequest):
+    completion = _completion(request, model, body)
+    parts: list[Part] = []
+    if completion.text or not completion.tool_calls:
+        parts.append(Part(text=completion.text))
+    parts.extend(
+        Part(functionCall={"name": c.name, "args": c.parsed_arguments})
+        for c in completion.tool_calls
+    )
     return GenerateContentResponse(
         candidates=[
             Candidate(
-                content=Content(role="model", parts=[Part(text=reply_text)]),
+                content=Content(role="model", parts=parts),
+                finishReason=_FINISH.get(completion.finish_reason, "STOP"),
                 index=0,
             )
         ],
         usageMetadata=UsageMetadata(
-            promptTokenCount=prompt_tokens,
-            candidatesTokenCount=output_tokens,
-            totalTokenCount=prompt_tokens + output_tokens,
+            promptTokenCount=completion.prompt_tokens,
+            candidatesTokenCount=completion.completion_tokens,
+            totalTokenCount=completion.total_tokens,
         ),
     )
+
+
+@router.post("/models/{model}:streamGenerateContent")
+def stream_generate_content(request: Request, model: str, body: GenerateContentRequest):
+    """SSE with ``alt=sse`` (what the SDKs use), a JSON array otherwise -- like the real API."""
+    completion = _completion(request, model, body)
+    if request.query_params.get("alt") == "sse":
+        return sse_response(gemini_chunks(completion, model=model))
+    return gemini_chunk_dicts(completion, model=model)
 
 
 @router.post("/models/{model}:batchGenerateContent")

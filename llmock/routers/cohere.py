@@ -23,7 +23,10 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from llmock.routers import batch as batch_support
-from llmock.simulation import MockResponseSettings, build_mock_text, estimate_tokens, flatten_text
+from llmock.completion import plan_of, resolve
+from llmock.routers._chat import is_streaming
+from llmock.simulation import MockResponseSettings, estimate_tokens, flatten_text
+from llmock.streaming import COHERE_FINISH, cohere_events, cohere_usage, sse_response
 
 router = APIRouter(prefix="/cohere/v2", tags=["cohere"])
 legacy_router = APIRouter(prefix="/cohere/v1", tags=["cohere"])
@@ -31,7 +34,12 @@ legacy_router = APIRouter(prefix="/cohere/v1", tags=["cohere"])
 
 class Message(BaseModel):
     role: str
-    content: str | list[Any]
+    # Assistant turns that only call tools have no content; tool results
+    # come back as role="tool" with a tool_call_id.
+    content: str | list[Any] | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None
+    tool_plan: str | None = None
 
 
 class ChatRequest(BaseModel):
@@ -43,6 +51,8 @@ class ChatRequest(BaseModel):
     k: int | None = None
     frequency_penalty: float | None = None
     presence_penalty: float | None = None
+    stream: bool = False
+    tools: list[dict[str, Any]] | None = None
 
 
 class TextContent(BaseModel):
@@ -52,7 +62,8 @@ class TextContent(BaseModel):
 
 class AssistantMessage(BaseModel):
     role: str = "assistant"
-    content: list[TextContent]
+    content: list[TextContent] | None = None
+    tool_calls: list[dict[str, Any]] | None = None
 
 
 class UsageTokens(BaseModel):
@@ -101,20 +112,31 @@ def list_models() -> ModelList:
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(request: Request, body: ChatRequest) -> ChatResponse:
-    prompt_text = " ".join(flatten_text(message.content) for message in body.messages)
-    input_tokens = estimate_tokens(*(message.content for message in body.messages))
-    reply_text = build_mock_text(
+def chat(request: Request, body: ChatRequest):
+    contents = [m.content for m in body.messages if m.content is not None]
+    completion = resolve(
+        plan=plan_of(request),
         settings=_response_settings(request),
         model=body.model,
-        prompt=prompt_text,
+        prompt_text=" ".join(flatten_text(c) for c in contents),
+        prompt_tokens=estimate_tokens(*contents),
     )
-    output_tokens = estimate_tokens(reply_text)
+    message_id = uuid.uuid4().hex
+    if is_streaming(request):
+        return sse_response(cohere_events(completion, message_id=message_id))
 
-    usage_units = UsageTokens(input_tokens=input_tokens, output_tokens=output_tokens)
+    tool_calls = [
+        {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments}}
+        for c in completion.tool_calls
+    ] or None
+    content = (
+        [TextContent(text=completion.text)] if completion.text or not tool_calls else None
+    )
     return ChatResponse(
-        message=AssistantMessage(content=[TextContent(text=reply_text)]),
-        usage=Usage(billed_units=usage_units, tokens=usage_units),
+        id=message_id,
+        finish_reason=COHERE_FINISH.get(completion.finish_reason, "COMPLETE"),
+        message=AssistantMessage(content=content, tool_calls=tool_calls),
+        usage=Usage(**cohere_usage(completion)),
     )
 
 
