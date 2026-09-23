@@ -246,3 +246,9 @@ def test_parallel_calls_each_keep_their_own_retries():
     verdict = judge(records)
     assert [len(c.attempts) for c in verdict.calls] == [2, 2]
     assert verdict.passed
+
+
+def test_retrying_then_giving_up_is_correct_behaviour():
+    """Bounded retries that all fail are what a good client does during an outage."""
+    records = [attempt(t, status=503, retry_after=0.5) for t in (0, 1, 2, 3)]
+    assert "gave_up" not in codes(judge(records))

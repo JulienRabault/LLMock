@@ -301,4 +301,22 @@ def pytest_terminal_summary(terminalreporter: Any, config: pytest.Config) -> Non
         return
     for nodeid, verdict in reports:
         terminalreporter.write_line(nodeid, bold=True)
-        terminalreporter.write_line(verdict.render())
+        for line in verdict.render().splitlines():
+            terminalreporter.write_line(line, **_markup(line, has_errors=bool(verdict.errors)))
+        terminalreporter.write_line("")
+
+
+def _markup(line: str, *, has_errors: bool) -> dict[str, bool]:
+    """pytest's own colour markup for one line of a verdict report."""
+    stripped = line.strip()
+    if stripped.startswith("FAIL"):
+        return {"red": True, "bold": True}
+    if stripped.startswith("WARN"):
+        return {"yellow": True, "bold": True}
+    if stripped.startswith("PASS"):
+        return {"green": True, "bold": True}
+    if stripped.endswith("warning(s)"):  # the "N error(s), M warning(s)" total
+        return {"red": True, "bold": True} if has_errors else {"yellow": True, "bold": True}
+    if line.startswith("LLMock resilience verdict"):
+        return {"cyan": True}
+    return {}

@@ -293,12 +293,14 @@ def _gave_up(call: Call, index: int) -> list[Finding]:
     retryable = last.status in RETRYABLE or (
         last.fault is not None and last.fault.startswith("stream:disconnect")
     )
-    if call.succeeded or not retryable:
+    # Retrying and then giving up after a bounded number of attempts is the
+    # right behaviour; only a client that never retried at all is flagged.
+    if call.succeeded or not retryable or len(call.attempts) > 1:
         return []
     what = "a dropped connection" if last.status < 400 else f"a {last.status}"
     return [_finding(
         "warning", "gave_up",
-        f"Gave up after {what} without retrying ({len(call.attempts)} attempt(s)).",
+        f"Gave up after {what} without a single retry.",
         "Transient failures are retryable: allow a couple of retries with backoff, "
         "or make sure the caller handles the error on purpose.",
         call, index, last,

@@ -150,9 +150,15 @@ class Journal:
         return self._in_flight.get(self._generation, 0)
 
     def clear(self) -> None:
+        """Forget every record and start numbering again at 1.
+
+        Restarting the numbering is safe: requests still in flight belong to
+        the old generation and their records are discarded.
+        """
         with self._cond:
             self._records.clear()
             self._generation += 1
+            self._next_seq = 1
 
     def __len__(self) -> int:
         with self._cond:

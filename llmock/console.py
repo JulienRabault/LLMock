@@ -88,8 +88,9 @@ def print_startup(
     stream: StreamChaos,
     config_path: str | None,
     version: str,
+    console: Console | None = None,
 ) -> None:
-    console = _console()
+    console = console or _console()
     console.print(logo(console))
     dot = "·" if _can_draw(console, "·") else "-"
     console.print(Text.assemble(

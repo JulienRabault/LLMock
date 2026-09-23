@@ -22,17 +22,6 @@ ERROR_RATE_ENV_PREFIX = "LLMOCK_ERROR_RATE_"
 SUPPORTED_ERROR_STATUS_CODES = tuple(range(400, 600))
 
 
-def raise_if_streaming(stream: bool) -> None:
-    """Raise HTTPException 501 when a client requests streaming mode.
-
-    LLMock does not implement SSE streaming. Returning 501 instead of silently
-    ignoring the flag prevents SDK streaming iterators from hanging forever.
-    """
-    if stream:
-        from fastapi import HTTPException  # local import avoids circularity
-        raise HTTPException(status_code=501, detail="Streaming is not supported by LLMock. Set stream=false.")
-
-
 @dataclass
 class MockResponseSettings:
     response_style: str = "varied"

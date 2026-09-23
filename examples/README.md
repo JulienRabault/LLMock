@@ -17,6 +17,33 @@ LLMOCK_BASE_URL=http://127.0.0.1:9001/v1 python examples/retry_with_openai.py
 
 ## Pick The Scenario
 
+### Resilience tests with pytest
+
+#### `test_resilience_pytest.py`
+
+The fastest way in. The `llmock` fixture ships with the package and points the OpenAI SDK at LLMock through `OPENAI_BASE_URL`, so the file contains plain application code. It shows a stream consumer that passes every assertion and is still wrong, then the fix, confirmed by the verdict.
+
+```bash
+pip install llmock openai
+pytest examples/test_resilience_pytest.py --llmock-report
+```
+
+### Agents
+
+#### `agents_sdk_offline.py`
+
+An OpenAI Agents SDK agent with a real `@function_tool`, run end to end with no API key: LLMock calls the tool with schema-valid arguments and answers once the result comes back. Then the same agent faces two rate limits and an outage, scripted through the `/_llmock` control API.
+
+```bash
+# Terminal 1
+llmock serve
+
+# Terminal 2
+pip install openai-agents
+python examples/agents_sdk_offline.py
+```
+
+
 ### Retry and backoff
 
 Use this when you want to validate HTTP retry behavior and watch your client recover from transient failures.
@@ -122,13 +149,18 @@ llmock serve --config examples/llmock.example.yaml
 llmock serve --config examples/llmock.example.json
 ```
 
-## Chaos Configuration Reference
+## Configuration Reference
 
-| Env var | Flag | Default | Purpose |
-|---|---|---|---|
-| `LLMOCK_LATENCY_MS` | `--latency-ms` | `0` | Add fixed latency before responses |
-| `LLMOCK_ERROR_RATE_<STATUS>` | `--error-rate STATUS=RATE` | `0.0` | Inject any `4xx` or `5xx` status |
-| `LLMOCK_RESPONSE_STYLE` | `--response-style` | `varied` | Success payload style |
+Every flag, its environment variable and its default are listed in the main [README](../README.md#configuration). The ones these examples use most:
+
+| Flag | Purpose |
+|---|---|
+| `--error-rate STATUS=RATE` | inject any `4xx` or `5xx` at random |
+| `--stream-fault KIND=RATE` | break a share of streams: `disconnect`, `truncate`, `stall`, `malformed` |
+| `--rpm`, `--tpm` | enforce real quotas, with the true `Retry-After` |
+| `--latency-ms` | add fixed latency |
+| `--response-style` | `static`, `hello`, `echo` or `varied` |
+| `--report` | print the resilience verdict when the server stops |
 
 ## Related Docs
 

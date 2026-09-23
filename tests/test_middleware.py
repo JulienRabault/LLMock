@@ -310,3 +310,12 @@ async def test_a_client_that_leaves_mid_upload_is_not_journaled():
              "headers": [(b"content-type", b"application/json")]}
     await middleware(scope, receive, send)
     assert reached == [] and state.journal.records() == []
+
+
+def test_numbering_restarts_after_a_reset(app, client):
+    """Each pytest test reads its own requests as #1, #2... in the verdict."""
+    client.post("/v1/chat/completions", json=CHAT)
+    client.post("/v1/chat/completions", json=CHAT)
+    app.state.llmock.reset()
+    client.post("/v1/chat/completions", json=CHAT)
+    assert [r.seq for r in journal(app)] == [1]

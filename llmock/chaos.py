@@ -158,9 +158,23 @@ chaos_settings = ChaosSettings.from_env()
 
 
 class ChaosMiddleware(BaseHTTPMiddleware):
-    """Middleware that injects latency and random errors based on ChaosSettings."""
+    """Middleware that injects latency and random errors based on ChaosSettings.
+
+    Deprecated since 0.2.0: ``create_app()`` uses
+    :class:`llmock.middleware.LLMockMiddleware`, which also handles scenarios,
+    stream faults, quotas and the journal. Kept for code that mounted this
+    middleware on its own app; it will be removed in a future release.
+    """
 
     def __init__(self, app, settings: ChaosSettings | None = None) -> None:
+        import warnings
+
+        warnings.warn(
+            "llmock.chaos.ChaosMiddleware is deprecated; create_app() uses "
+            "llmock.middleware.LLMockMiddleware.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(app)
         self.settings = (settings or ChaosSettings.from_env()).validated()
 
