@@ -81,15 +81,17 @@ class Admission:
 class _Bucket:
     """Continuously refilling token bucket, full at start."""
 
-    def __init__(self, capacity: int, per_minute: int) -> None:
+    def __init__(self, capacity: int, per_minute: int, now: float) -> None:
         self.capacity = capacity
         self.rate = per_minute / 60.0
         self.level = float(capacity)
-        self.updated = time.monotonic()
+        self.updated = now
 
     def refill(self, now: float) -> None:
-        self.level = min(self.capacity, self.level + (now - self.updated) * self.rate)
-        self.updated = now
+        # Never let time run backwards: a negative delta would drain the bucket.
+        elapsed = max(0.0, now - self.updated)
+        self.level = min(self.capacity, self.level + elapsed * self.rate)
+        self.updated = max(self.updated, now)
 
     def wait_for(self, amount: float) -> float:
         missing = amount - self.level
@@ -155,7 +157,7 @@ class RateLimiter:
         slot = (provider, key, kind)
         bucket = self._buckets.get(slot)
         if bucket is None:
-            bucket = self._buckets[slot] = _Bucket(per_minute, per_minute)
+            bucket = self._buckets[slot] = _Bucket(per_minute, per_minute, now)
         bucket.refill(now)
         return bucket
 

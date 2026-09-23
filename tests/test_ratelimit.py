@@ -178,3 +178,23 @@ def test_scripted_stream_faults_win_over_random_ones():
 def test_stream_chaos_validation():
     with pytest.raises(ValueError):
         StreamChaos(fault_rates=(("truncate", 0.7), ("disconnect", 0.7))).validated()
+
+
+def test_a_fresh_bucket_is_full_even_if_the_clock_ticks_finely(monkeypatch):
+    """Regression: on Linux the clock advances between calls, and the bucket
+    used to read its creation time *after* `now`, starting slightly drained --
+    so the very first request of an rpm=1 limit was refused."""
+    ticks = iter(range(1, 1000))
+    monkeypatch.setattr("llmock.ratelimit.time.monotonic", lambda: next(ticks) * 1e-9)
+    limiter = RateLimiter(LimitSettings(rpm=1, tpm=1000))
+    assert limiter.admit("openai", "k", 500).allowed
+    assert not limiter.admit("openai", "k", 1).allowed
+
+
+def test_the_bucket_ignores_a_clock_that_goes_backwards():
+    from llmock.ratelimit import _Bucket
+
+    bucket = _Bucket(10, 60, now=100.0)
+    bucket.level = 4.0
+    bucket.refill(now=99.0)
+    assert bucket.level == 4.0
