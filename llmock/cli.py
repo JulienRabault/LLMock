@@ -376,22 +376,19 @@ def serve(
     )
     _set_server_env(chaos=chaos, responses=responses, limits=limits, stream=stream, report=report)
 
-    configured_rates = _format_error_rates(chaos)
-    if chaos.latency_ms or configured_rates:
-        typer.echo(f"Chaos: latency={chaos.latency_ms}ms  errors=[{configured_rates or 'none'}]")
+    from llmock import __version__
+    from llmock.console import print_startup
 
-    if config_path:
-        typer.echo(f"Config: {config_path}")
-    typer.echo(f"Responses: style={responses.response_style}  tools={responses.tool_mode}")
-    if limits.enabled or limits.context_window:
-        typer.echo(
-            f"Limits: rpm={limits.rpm or '-'}  tpm={limits.tpm or '-'}  "
-            f"context_window={limits.context_window or '-'}"
-        )
-    if stream.fault_rates or stream.chunk_delay_ms:
-        faults = ", ".join(f"{k}={v:.0%}" for k, v in stream.fault_rates) or "none"
-        typer.echo(f"Streams: faults=[{faults}]  chunk_delay={stream.chunk_delay_ms}ms")
-    typer.echo(f"Starting LLMock on http://{resolved_host}:{resolved_port}")
+    print_startup(
+        host=resolved_host,
+        port=resolved_port,
+        chaos=chaos,
+        responses=responses,
+        limits=limits,
+        stream=stream,
+        config_path=config_path,
+        version=__version__,
+    )
     uvicorn.run(
         "llmock.main:create_app",
         factory=True,
@@ -421,7 +418,12 @@ def report(
     except httpx.HTTPError as exc:
         typer.echo(f"Could not reach LLMock at {base}: {exc}", err=True)
         raise typer.Exit(2) from exc
-    typer.echo(json.dumps(data, indent=2) if as_json else text)
+    if as_json:
+        typer.echo(json.dumps(data, indent=2))
+    else:
+        from llmock.console import print_report
+
+        print_report(text)
     if not data["passed"] or (strict and data["warnings"]):
         raise typer.Exit(1)
 

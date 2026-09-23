@@ -41,7 +41,7 @@ def test_new_flags_reach_the_app(captured_env):
     assert captured_env["LLMOCK_STREAM_FAULT_DISCONNECT"] == "0.05"
     assert captured_env["LLMOCK_STREAM_CHUNK_DELAY_MS"] == "20"
     assert captured_env["LLMOCK_REPORT"] == "1"
-    assert "Limits: rpm=60" in result.output and "truncate=10%" in result.output
+    assert "rpm=60" in result.output and "truncate=10%" in result.output
 
 
 def test_settings_come_from_the_config_file(captured_env, tmp_path):

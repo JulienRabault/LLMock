@@ -75,6 +75,8 @@ app = create_app(chaos=chaos_settings)
 
 
 def _print_verdict(state: LLMockState) -> None:
+    from llmock.console import print_verdict
     from llmock.verdict import judge
 
-    print("\n" + judge(state.journal.records()).render(), flush=True)
+    print()
+    print_verdict(judge(state.journal.records()))

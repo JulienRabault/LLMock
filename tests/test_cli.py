@@ -50,8 +50,8 @@ def test_cli_uses_env_defaults_when_flags_are_omitted(monkeypatch):
     result = runner.invoke(cli.app, ["serve"])
 
     assert result.exit_code == 0
-    assert "Chaos: latency=175ms  errors=[404=5%, 429=25%, 500=15%, 503=5%]" in result.stdout
-    assert "Responses: style=varied" in result.stdout
+    assert "latency=175ms  errors=[404=5%, 429=25%, 500=15%, 503=5%]" in result.stdout
+    assert "style=varied" in result.stdout
     assert captured["app_target"] == "llmock.main:create_app"
     assert captured["factory"] is True
     assert captured["host"] == "0.0.0.0"
@@ -83,7 +83,7 @@ def test_cli_flags_override_environment(monkeypatch):
     )
 
     assert result.exit_code == 0
-    assert "Chaos: latency=300ms  errors=[429=50%, 500=20%, 503=10%]" in result.stdout
+    assert "latency=300ms  errors=[429=50%, 500=20%, 503=10%]" in result.stdout
     assert cli.os.environ["LLMOCK_LATENCY_MS"] == "300"
     assert cli.os.environ["LLMOCK_ERROR_RATE_429"] == "0.5"
     assert cli.os.environ["LLMOCK_ERROR_RATE_500"] == "0.2"
@@ -131,7 +131,7 @@ def test_cli_host_port_flags_override_environment(monkeypatch):
     result = runner.invoke(cli.app, ["serve", "--host", "127.0.0.1", "--port", "8123"])
 
     assert result.exit_code == 0
-    assert "Starting LLMock on http://127.0.0.1:8123" in result.stdout
+    assert "Listening  http://127.0.0.1:8123" in result.stdout
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 8123
 
@@ -160,9 +160,9 @@ def test_cli_reads_json_config_file(tmp_path, monkeypatch):
     result = runner.invoke(cli.app, ["serve", "--config", str(config_path)])
 
     assert result.exit_code == 0
-    assert f"Config: {config_path}" in result.stdout
-    assert "Chaos: latency=120ms  errors=[404=5%, 507=15%]" in result.stdout
-    assert "Responses: style=echo" in result.stdout
+    assert str(config_path) in result.stdout
+    assert "latency=120ms  errors=[404=5%, 507=15%]" in result.stdout
+    assert "style=echo" in result.stdout
     assert captured["host"] == "0.0.0.0"
     assert captured["port"] == 9100
 
@@ -203,7 +203,7 @@ def test_environment_overrides_config_file(tmp_path, monkeypatch):
     result = runner.invoke(cli.app, ["serve", "--config", str(config_path)])
 
     assert result.exit_code == 0
-    assert "Chaos: latency=300ms  errors=[404=5%, 429=20%]" in result.stdout
-    assert "Responses: style=varied" in result.stdout
+    assert "latency=300ms  errors=[404=5%, 429=20%]" in result.stdout
+    assert "style=varied" in result.stdout
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 8123
