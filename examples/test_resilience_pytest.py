@@ -12,8 +12,9 @@ and is still wrong: a stream cut halfway returns half an answer, silently.
 `resilient_stream` is the fix, and the verdict confirms it.
 """
 
-import openai
 import pytest
+
+openai = pytest.importorskip("openai")  # the example needs the OpenAI SDK
 
 MESSAGES = [{"role": "user", "content": "Summarise the Q3 report"}]
 
