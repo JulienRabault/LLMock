@@ -10,6 +10,7 @@ objects and arrays, anyOf/oneOf/allOf, local ``$ref`` into ``$defs`` or
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 __all__ = ["example_for", "from_openapi"]
@@ -115,23 +116,61 @@ def _string(schema: dict[str, Any], name: str) -> str:
 
 
 def _number(schema: dict[str, Any], *, integer: bool) -> float:
-    low = schema.get("minimum", schema.get("exclusiveMinimum"))
-    high = schema.get("maximum", schema.get("exclusiveMaximum"))
-    step = 1 if integer else 0.5
-    if low is not None:
-        value = low + (step if "exclusiveMinimum" in schema and "minimum" not in schema else 0)
-    elif high is not None:
-        value = high - (step if "exclusiveMaximum" in schema and "maximum" not in schema else 0)
-        value = min(value, 1)
+    """A number within the bounds, and a multiple of ``multipleOf`` when asked.
+
+    Handles both spellings of exclusive bounds: numeric (draft 2019-09 and
+    later) and the draft-04 boolean modifier on ``minimum``/``maximum``.
+    """
+    low, low_open = _bound(schema, "minimum", "exclusiveMinimum", lower=True)
+    high, high_open = _bound(schema, "maximum", "exclusiveMaximum", lower=False)
+
+    # Turn open bounds into closed ones.
+    if integer:
+        if low is not None:
+            low = math.floor(low) + 1 if low_open else math.ceil(low)
+        if high is not None:
+            high = math.ceil(high) - 1 if high_open else math.floor(high)
     else:
-        value = 1
+        gap = (high - low) / 2 if low is not None and high is not None else 0.5
+        if low is not None and low_open:
+            low = low + gap
+        if high is not None and high_open:
+            high = high - gap
+
+    value: float = 1
+    if low is not None:
+        value = max(value, low)
     if high is not None:
-        ceiling = high - (step if "exclusiveMaximum" in schema and "maximum" not in schema else 0)
-        value = min(value, ceiling)
+        value = min(value, high)
+
     multiple = schema.get("multipleOf")
-    if multiple:
-        value = multiple * max(1, round(value / multiple))
+    if isinstance(multiple, (int, float)) and multiple > 0:
+        k = round(value / multiple) or 1
+        if low is not None:
+            k = max(k, math.ceil(low / multiple - 1e-9))
+        if high is not None:
+            k = min(k, math.floor(high / multiple + 1e-9))
+        candidate = round(k * multiple, 10)
+        # No multiple fits in the bounds: the schema is unsatisfiable, keep `value`.
+        if (low is None or candidate >= low) and (high is None or candidate <= high):
+            value = candidate
     return int(value) if integer else float(value)
+
+
+def _bound(schema: dict[str, Any], closed_key: str, open_key: str, *,
+           lower: bool) -> tuple[float | None, bool]:
+    """The effective bound and whether it is exclusive."""
+    closed = schema.get(closed_key)
+    open_ = schema.get(open_key)
+    closed = closed if isinstance(closed, (int, float)) and not isinstance(closed, bool) else None
+    if isinstance(open_, bool):  # draft-04: a modifier on the closed bound
+        return closed, open_ and closed is not None
+    if isinstance(open_, (int, float)):
+        if closed is None:
+            return open_, True
+        stricter_open = open_ >= closed if lower else open_ <= closed
+        return (open_, True) if stricter_open else (closed, False)
+    return closed, False
 
 
 # Gemini's OpenAPI dialect, as google-genai actually sends it: snake_case

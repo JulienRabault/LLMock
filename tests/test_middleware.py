@@ -265,3 +265,48 @@ def test_admin_exposes_the_verdict(client):
     assert data["findings"][0]["code"] == "retried_non_retryable"
     text = client.get("/_llmock/verdict?format=text").text
     assert "retried_non_retryable" in text and "FAIL" in text
+
+
+def test_admin_accepts_json_without_a_json_content_type(client):
+    """`curl -d '{...}'` sends form encoding; the README example must still work."""
+    response = client.post(
+        "/_llmock/scenario",
+        content=b'{"behaviors": [{"type": "fail", "status": 429}]}',
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+    assert response.status_code == 201
+    assert client.post("/v1/chat/completions", json=CHAT).status_code == 429
+
+
+def test_admin_rejects_a_body_that_is_not_json(client):
+    response = client.post("/_llmock/scenario", content=b"not json")
+    assert response.status_code == 400
+
+
+async def test_a_client_that_leaves_mid_upload_is_not_journaled():
+    """Found in code review: a disconnect while sending the body used to be served."""
+    from llmock.middleware import LLMockMiddleware
+
+    app = create_app(chaos=ChaosSettings())
+    state = app.state.llmock
+    reached = []
+
+    async def downstream(scope, receive, send):
+        reached.append(True)
+
+    middleware = LLMockMiddleware(downstream, state)
+    messages = iter([
+        {"type": "http.request", "body": b'{"model": "gpt', "more_body": True},
+        {"type": "http.disconnect"},
+    ])
+
+    async def receive():
+        return next(messages)
+
+    async def send(message):
+        raise AssertionError("nothing should be sent")
+
+    scope = {"type": "http", "path": "/v1/chat/completions", "method": "POST",
+             "headers": [(b"content-type", b"application/json")]}
+    await middleware(scope, receive, send)
+    assert reached == [] and state.journal.records() == []

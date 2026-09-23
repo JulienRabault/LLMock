@@ -76,6 +76,8 @@ class LLMockMiddleware:
 
         started_at = time.monotonic()
         raw_body = await _read_body(receive)
+        if raw_body is None:
+            return  # the client left mid-upload: nothing to answer, journal or charge
         replay = _replay(raw_body, receive)
         headers = _headers(scope)
         body = _parse_json(raw_body, headers)
@@ -364,10 +366,13 @@ def _bypassed(path: str) -> bool:
     return path in _BYPASS_PATHS or path.startswith(_BYPASS_PREFIXES)
 
 
-async def _read_body(receive: Receive) -> bytes:
+async def _read_body(receive: Receive) -> bytes | None:
+    """The whole request body, or None if the client disconnected first."""
     chunks: list[bytes] = []
     while True:
         message = await receive()
+        if message["type"] == "http.disconnect":
+            return None
         if message["type"] != "http.request":
             break
         chunks.append(message.get("body", b""))

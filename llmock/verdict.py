@@ -152,21 +152,29 @@ def judge(records: Iterable[RequestRecord]) -> Verdict:
 
 
 def group_calls(records: Iterable[RequestRecord]) -> list[Call]:
-    """Group attempts of the same logical call, in arrival order."""
+    """Group attempts of the same logical call, in arrival order.
+
+    A record is a retry of an earlier same-body attempt only if that attempt
+    failed *and had already ended* when the record started: a client cannot
+    retry what it has not seen fail. Identical requests that overlap in time
+    -- ``asyncio.gather`` of one prompt -- are therefore separate calls, not
+    a retry storm.
+    """
     groups: list[list[RequestRecord]] = []
-    open_by_fingerprint: dict[str, list[RequestRecord]] = {}
+    # Per fingerprint, the calls whose latest attempt failed: they may be retried.
+    retryable: dict[str, list[list[RequestRecord]]] = {}
     for record in sorted(records, key=lambda r: r.seq):
-        group = open_by_fingerprint.get(record.fingerprint)
-        if group is not None:
+        pool = retryable.setdefault(record.fingerprint, [])
+        candidates = [g for g in pool if g[-1].ended_at <= record.started_at]
+        if candidates:
+            group = max(candidates, key=lambda g: g[-1].ended_at)
             group.append(record)
         else:
             group = [record]
             groups.append(group)
-        # Only a failed attempt can be followed by a retry.
+        pool[:] = [g for g in pool if g is not group]
         if _failed(record):
-            open_by_fingerprint[record.fingerprint] = group
-        else:
-            open_by_fingerprint.pop(record.fingerprint, None)
+            pool.append(group)
     return [Call(tuple(g)) for g in groups]
 
 

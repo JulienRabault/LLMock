@@ -16,6 +16,7 @@ These routes bypass chaos and are never journaled.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -39,7 +40,15 @@ def _state(request: Request) -> LLMockState:
 
 
 @router.post("/scenario", status_code=201)
-def add_scenario(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+async def add_scenario(request: Request) -> dict[str, Any]:
+    # Parsed by hand rather than through a pydantic body parameter, so that a
+    # `curl -d '{...}'` without a JSON content type still works.
+    try:
+        payload = json.loads(await request.body() or b"{}")
+    except ValueError:
+        raise HTTPException(400, "The body must be JSON.") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Expected a JSON object with a 'behaviors' list.")
     raw = payload.get("behaviors")
     if not isinstance(raw, list) or not raw:
         raise HTTPException(400, "Expected a non-empty 'behaviors' list.")

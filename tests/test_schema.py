@@ -165,3 +165,26 @@ def test_property_names_are_never_renamed():
     schema = from_openapi({"type": "OBJECT", "properties": {"min_length": {"type": "INTEGER"}}})
     assert list(schema["properties"]) == ["min_length"]
     assert schema["properties"]["min_length"]["type"] == "integer"
+
+
+# -- numeric bounds (from code review) -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"type": "integer", "minimum": 8, "maximum": 15, "multipleOf": 7},
+        {"type": "number", "minimum": 0.3, "maximum": 1.0, "multipleOf": 0.25},
+        {"type": "integer", "minimum": -20, "maximum": -3, "multipleOf": 5},
+        {"type": "integer", "minimum": 5, "exclusiveMinimum": True},     # draft-04 style
+        {"type": "number", "maximum": 10, "exclusiveMaximum": True},     # draft-04 style
+        {"type": "integer", "exclusiveMinimum": 3, "exclusiveMaximum": 5},
+        {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 0.1},
+    ],
+)
+def test_numeric_bounds_and_multiples_hold_together(schema):
+    value = example_for(schema)
+    draft = jsonschema.Draft4Validator if isinstance(
+        schema.get("exclusiveMinimum", schema.get("exclusiveMaximum")), bool
+    ) else jsonschema.Draft202012Validator
+    draft(schema).validate(value)

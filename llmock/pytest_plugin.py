@@ -226,14 +226,17 @@ class LLMock:
 
     def reset(self) -> LLMock:
         """Forget requests and queued behaviours; restore default settings."""
-        from llmock.chaos import StreamChaos
+        from llmock.chaos import ChaosSettings, StreamChaos
         from llmock.ratelimit import LimitSettings
         from llmock.simulation import MockResponseSettings
 
         state = self._server.state
         state.reset()
-        state.chaos.error_rates = {}
-        state.chaos.latency_ms = 0
+        # Swap whole objects rather than mutate them: the server thread may be
+        # reading these for a request still in flight from the previous test.
+        fresh_chaos = ChaosSettings()
+        state.chaos = fresh_chaos
+        self._server.app.state.chaos_settings = fresh_chaos
         state.limiter.configure(LimitSettings())
         state.stream_chaos = StreamChaos()
         self._server.app.state.mock_response_settings = MockResponseSettings()

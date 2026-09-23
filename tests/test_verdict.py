@@ -213,3 +213,36 @@ def test_no_retries_on_a_503_is_a_warning(server):
     with pytest.raises(openai.InternalServerError):
         client.chat.completions.create(**CHAT)
     assert [f.code for f in verdict_of(server).findings] == ["gave_up"]
+
+
+# -- concurrency (from code review) ----------------------------------------------
+
+
+def test_concurrent_identical_requests_are_separate_calls():
+    """asyncio.gather of the same prompt, all rate-limited: 12 calls, not 12 retries."""
+    records = [attempt(0.0 + i * 0.001, status=429, duration=0.2, retry_after=1.0) for i in range(12)]
+    verdict = judge(records)
+    assert len(verdict.calls) == 12
+    assert "retry_storm" not in codes(verdict)
+    assert "retry_after_ignored" not in codes(verdict)
+
+
+def test_a_retry_starts_after_its_failure_ended():
+    """Overlapping in time rules out a retry; following it does not."""
+    calls = group_calls([
+        attempt(0.0, status=503, duration=0.5),
+        attempt(0.2, status=503, duration=0.5),   # overlaps the first: another call
+        attempt(1.0),                              # after both: a retry
+    ])
+    assert sorted(len(c.attempts) for c in calls) == [1, 2]
+
+
+def test_parallel_calls_each_keep_their_own_retries():
+    records = [
+        attempt(0.0, status=429, duration=0.1, retry_after=0.5),
+        attempt(0.01, status=429, duration=0.1, retry_after=0.5),
+        attempt(0.7), attempt(0.71),
+    ]
+    verdict = judge(records)
+    assert [len(c.attempts) for c in verdict.calls] == [2, 2]
+    assert verdict.passed
