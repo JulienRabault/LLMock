@@ -2,6 +2,12 @@
 
 All notable changes to this project should be documented in this file.
 
+## [0.2.1] - 2026-09-23
+
+### Fixed
+
+- `llmock --help` and the API description at `/docs` still used the pre-0.2 tagline.
+
 ## [0.2.0] - 2026-09-23
 
 LLMock no longer only breaks your client: it tells you whether your client coped.
