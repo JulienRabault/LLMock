@@ -44,7 +44,7 @@ def create_app(
 
     app = FastAPI(
         title="LLMock",
-        description="OpenAI-compatible mock server for LLM API resilience testing",
+        description="Chaos engineering for LLM apps: mock 10 providers, break them on demand, judge your client.",
         version=__version__,
     )
 

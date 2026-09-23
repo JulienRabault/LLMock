@@ -16,7 +16,7 @@ from llmock.simulation import ERROR_RATE_ENV_PREFIX, MockResponseSettings, SUPPO
 
 app = typer.Typer(
     name="llmock",
-    help="OpenAI-compatible mock server for LLM API resilience testing.",
+    help="Chaos engineering for LLM apps: mock 10 providers, break them on demand, judge your client.",
     no_args_is_help=True,
 )
 
