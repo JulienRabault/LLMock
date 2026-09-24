@@ -2,6 +2,12 @@
 
 All notable changes to this project should be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Mistral streaming (`/mistral/v1/chat/completions` with `stream: true`): stream tool calls whole with complete arguments in a shared delta rather than OpenAI-style argument fragmentation.
+
 ## [0.2.1] - 2026-09-23
 
 ### Fixed

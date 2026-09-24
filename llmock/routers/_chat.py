@@ -66,6 +66,7 @@ def openai_stream(
     model: str,
     choices: int = 1,
     id_prefix: str = "chatcmpl",
+    fragment_tool_calls: bool = True,
 ) -> StreamingResponse:
     options = raw_body(request).get("stream_options") or {}
     return sse_response(
@@ -75,6 +76,7 @@ def openai_stream(
             model=model,
             include_usage=bool(options.get("include_usage")),
             choices=max(1, choices),
+            fragment_tool_calls=fragment_tool_calls,
         )
     )
 
