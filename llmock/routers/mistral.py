@@ -133,7 +133,14 @@ def chat_completions(request: Request, body: ChatCompletionRequest) -> ChatCompl
         request, model=body.model, prompt_text=prompt_text, prompt_tokens=prompt_tokens
     )
     if is_streaming(request):
-        return openai_stream(request, completion, model=body.model, choices=body.n, id_prefix="cmpl")
+        return openai_stream(
+            request,
+            completion,
+            model=body.model,
+            choices=body.n,
+            id_prefix="cmpl",
+            fragment_tool_calls=False,
+        )
     reply_text = completion.text
     completion_tokens = completion.completion_tokens
     prompt_tokens = completion.prompt_tokens

@@ -81,6 +81,7 @@ def openai_chat_chunks(
     include_usage: bool = False,
     choices: int = 1,
     created: int | None = None,
+    fragment_tool_calls: bool = True,
 ) -> Iterator[bytes]:
     created = int(time.time()) if created is None else created
 
@@ -108,18 +109,30 @@ def openai_chat_chunks(
             for piece in text_pieces(completion.text):
                 yield chunk([choice(index, {"content": piece})])
 
-        for position, call in enumerate(completion.tool_calls):
-            yield chunk([choice(index, {"tool_calls": [{
-                "index": position,
-                "id": call.id,
-                "type": "function",
-                "function": {"name": call.name, "arguments": ""},
-            }]})])
-            for fragment in fragments(call.arguments):
+        if not fragment_tool_calls:
+            if completion.tool_calls:
+                yield chunk([choice(index, {"tool_calls": [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {"name": call.name, "arguments": call.arguments},
+                        "index": position,
+                    }
+                    for position, call in enumerate(completion.tool_calls)
+                ]})])
+        else:
+            for position, call in enumerate(completion.tool_calls):
                 yield chunk([choice(index, {"tool_calls": [{
                     "index": position,
-                    "function": {"arguments": fragment},
+                    "id": call.id,
+                    "type": "function",
+                    "function": {"name": call.name, "arguments": ""},
                 }]})])
+                for fragment in fragments(call.arguments):
+                    yield chunk([choice(index, {"tool_calls": [{
+                        "index": position,
+                        "function": {"arguments": fragment},
+                    }]})])
 
         finish = _OPENAI_FINISH.get(completion.finish_reason, completion.finish_reason)
         yield chunk([choice(index, {}, finish)])
